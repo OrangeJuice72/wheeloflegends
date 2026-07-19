@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#07080f" />
     <title>Wheel of Legends</title>
     <style>
-      html, body { margin: 0; width: 100%; height: 100%; background: #07080f; overflow: hidden; }
-      body { position: fixed; inset: 0; height: 100dvh; overscroll-behavior: none; touch-action: none; user-select: none; -webkit-user-select: none; }
-      #app { position: fixed; inset: 0; width: 100%; height: 100%; height: 100dvh; background: #07080f; }
+      html, body { margin: 0; width: 100%; height: 100%; min-width: 0; min-height: 0; background: #07080f; overflow: hidden; }
+      body { position: fixed; inset: 0; height: 100%; height: 100dvh; overscroll-behavior: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+      #app { position: absolute; top: 0; left: 0; width: 100vw; height: 100%; height: 100dvh; overflow: hidden; contain: strict; background: #07080f; transform-origin: top left; }
       #game { position: absolute; top: env(safe-area-inset-top); right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); left: env(safe-area-inset-left); overflow: hidden; }
-      #game canvas { display: block; width: 100%; height: 100%; }
+      #game canvas { display: block; position: absolute; inset: 0; width: 100% !important; height: 100% !important; max-width: 100%; max-height: 100%; }
       #rotate-device { display: none; position: absolute; inset: 0; z-index: 10; align-items: center; justify-content: center; flex-direction: column; gap: 18px; padding: 32px; box-sizing: border-box; color: #e8ecf8; text-align: center; font-family: Bahnschrift, "Arial Narrow", "Segoe UI", sans-serif; background: radial-gradient(circle at center, #142042, #07080f 70%); }
       #rotate-device .phone { font-size: 64px; transform: rotate(90deg); }
       #rotate-device strong { color: #f5c542; font: bold 28px Cambria, "Times New Roman", serif; letter-spacing: 1px; }
@@ -18,6 +18,10 @@
       @media (orientation: portrait) {
         #game { visibility: hidden; }
         #rotate-device { display: flex; }
+      }
+
+      @media (orientation: landscape) and (max-height: 500px) {
+        #rotate-device { padding: 18px; }
       }
     </style>
   </head>
