@@ -15,6 +15,7 @@ import type { Game } from '../../app/Game';
 import { Tweens, Easing } from '../../core/Tween';
 import { Balance } from '../../data/balance';
 import { CHARACTERS } from '../../data/characters';
+import { getModifier } from '../../data/modifiers';
 import { FRANCHISES, getFranchise, type FranchiseDef } from '../../data/franchises';
 import type { CharacterDef, Rarity } from '../../data/types';
 import type { Sfx } from '../../audio/Sfx';
@@ -31,11 +32,15 @@ import { FeatheredBackground } from '../fx/FeatheredBackground';
 import { SettingsModal } from '../components/SettingsModal';
 import { buildRarityIcon } from '../components/RarityIcon';
 
-const REEL_W = 136;
-const ITEM_H = 95;
-const WINDOW_H = ITEM_H * 3;
-const REEL_XS = [260, 457];
-const REEL_Y = 140;
+// All three wheels now scroll horizontally. The two constraint reels stack as
+// full-width bars inside the left cabinet; the legend rail sits below them.
+const REEL_WIN_X = 92;
+const REEL_WIN_W = 626;
+const REEL_ITEM_W = 150;
+const REEL_H = 96;
+const REEL_YS = [158, 292];
+const REEL_VISIBLE = Math.ceil(REEL_WIN_W / REEL_ITEM_W) + 2;
+const REEL_LEAD = Math.ceil(REEL_WIN_W / 2 / REEL_ITEM_W) + 1;
 const RAIL_X = 106;
 const RAIL_Y = 510;
 const RAIL_W = 624;
@@ -45,11 +50,12 @@ const RAIL_ITEM_W = 142;
 type RevealTier = 0 | 1 | 2 | 3 | 4 | 5;
 const REVEAL_TIER: Record<Rarity, RevealTier> = { common: 0, rare: 1, epic: 2, legendary: 3, supreme: 4, godlike: 5 };
 
-// ── one reel ──────────────────────────────────────────────────────────────
+// ── one reel (horizontal) ───────────────────────────────────────────────────
 class Reel {
   readonly wrap = new Container();
   private strip = new Container();
   private hotGlow: Sprite;
+  private marker: Graphics;
   private faces: Container[] = [];
   offset = 0;
   hot = false;
@@ -62,35 +68,42 @@ class Reel {
 
     this.hotGlow = new Sprite(glowTexture());
     this.hotGlow.anchor.set(0.5);
-    this.hotGlow.position.set(REEL_W / 2, WINDOW_H / 2);
-    this.hotGlow.width = REEL_W * 2.4;
-    this.hotGlow.height = WINDOW_H * 1.6;
+    this.hotGlow.position.set(REEL_WIN_W / 2, REEL_H / 2);
+    this.hotGlow.width = REEL_WIN_W * 1.15;
+    this.hotGlow.height = REEL_H * 2.6;
     this.hotGlow.blendMode = 'add';
     this.hotGlow.alpha = 0;
     this.wrap.addChild(this.hotGlow);
 
-    const back = new Graphics().roundRect(-4, -4, REEL_W + 8, WINDOW_H + 8, 8).fill(0x0a0b13);
+    const back = new Graphics().roundRect(-4, -4, REEL_WIN_W + 8, REEL_H + 8, 8).fill(0x0a0b13);
     this.wrap.addChild(back, this.strip);
 
-    const mask = new Graphics().roundRect(0, 0, REEL_W, WINDOW_H, 6).fill(Palette.white);
+    const mask = new Graphics().roundRect(0, 0, REEL_WIN_W, REEL_H, 6).fill(Palette.white);
     this.wrap.addChild(mask);
     this.strip.mask = mask;
 
+    // Left/right edge shade fades the rows travelling in and out of frame.
     const shade = new Graphics()
-      .rect(0, 0, REEL_W, 44)
+      .rect(0, 0, 56, REEL_H)
       .fill({ color: Palette.black, alpha: 0.55 })
-      .rect(0, WINDOW_H - 44, REEL_W, 44)
+      .rect(REEL_WIN_W - 56, 0, 56, REEL_H)
       .fill({ color: Palette.black, alpha: 0.55 });
     shade.mask = mask;
     this.wrap.addChild(shade);
+
+    // Center payline bracket marks the item that will lock.
+    this.marker = new Graphics()
+      .roundRect(REEL_WIN_W / 2 - REEL_ITEM_W / 2 + 5, -5, REEL_ITEM_W - 10, REEL_H + 10, 9)
+      .stroke({ color: Palette.gold, width: 2, alpha: 0.75 });
+    this.wrap.addChild(this.marker);
   }
 
   populate(faces: Container[], keepFraction = false): void {
-    const frac = keepFraction ? this.offset % ITEM_H : 0;
+    const frac = keepFraction ? this.offset % REEL_ITEM_W : 0;
     this.strip.removeChildren().forEach((c) => c.destroy({ children: true }));
     this.faces = faces;
     faces.forEach((face, k) => {
-      face.position.set(REEL_W / 2, k * ITEM_H + ITEM_H / 2);
+      face.position.set(k * REEL_ITEM_W + REEL_ITEM_W / 2, REEL_H / 2);
       this.strip.addChild(face);
     });
     this.offset = frac;
@@ -98,17 +111,23 @@ class Reel {
   }
 
   private apply(): void {
-    this.strip.y = -this.offset;
+    this.strip.x = -this.offset;
   }
 
   /** Offset that centers item k on the payline. */
   static centerOffset(k: number): number {
-    return (k - 1) * ITEM_H;
+    return k * REEL_ITEM_W + REEL_ITEM_W / 2 - REEL_WIN_W / 2;
   }
 
   centerFace(): Container | null {
-    const k = Math.round(this.offset / ITEM_H) + 1;
+    const k = Math.round((this.offset + REEL_WIN_W / 2 - REEL_ITEM_W / 2) / REEL_ITEM_W);
     return this.faces[k] ?? null;
+  }
+
+  /** Rest with item `index` framed by the payline (avoids idle gap under the bracket). */
+  centerOn(index: number): void {
+    this.offset = Reel.centerOffset(Math.max(0, Math.min(this.faces.length - 1, index)));
+    this.apply();
   }
 
   /** Fast blind whir over identical mystery faces (seamless recycle). */
@@ -121,12 +140,12 @@ class Reel {
   update(dt: number): void {
     if (this.looping) {
       this.offset += this.loopSpeed * dt;
-      const loopSpan = Math.max(ITEM_H, (this.faces.length - 3) * ITEM_H);
+      const loopSpan = Math.max(REEL_ITEM_W, (this.faces.length - REEL_VISIBLE) * REEL_ITEM_W);
       while (this.offset >= loopSpan) this.offset -= loopSpan;
       this.apply();
       this.tickCooldown -= dt;
       if (this.tickCooldown <= 0) {
-        this.tickCooldown = 0.07;
+        this.tickCooldown = 0.06;
         this.sfx.wheelTick(0.8 + Math.random() * 0.15);
       }
     }
@@ -134,24 +153,25 @@ class Reel {
 
   /**
    * Hand off from the blind loop to a real stop: the strip becomes
-   * [3 mysteries (visual continuity) + tail], then decelerates so item
+   * [lead mysteries (visual continuity) + tail], then decelerates so item
    * `targetIdxInTail` lands the payline. Duration is derived from distance so
    * the deceleration starts at roughly the loop's velocity.
    */
   beginStop(tail: Container[], targetIdxInTail: number, leadIn: Container[], onComplete: () => void): void {
     this.looping = false;
-    this.populate([...leadIn.slice(0, 3), ...tail], true);
-    const toIndex = 3 + targetIdxInTail;
+    const lead = leadIn.slice(0, REEL_LEAD);
+    this.populate([...lead, ...tail], true);
+    const toIndex = lead.length + targetIdxInTail;
     const from = this.offset;
     const to = Reel.centerOffset(toIndex);
     const duration = Math.min(2.2, Math.max(0.6, (2 * (to - from)) / this.loopSpeed));
-    let lastIdx = Math.floor(from / ITEM_H);
+    let lastIdx = Math.floor(from / REEL_ITEM_W);
     Tweens.run({
       duration,
       ease: Easing.quadOut,
       onUpdate: (t) => {
         this.offset = from + (to + 12 - from) * t;
-        const idx = Math.floor(this.offset / ITEM_H);
+        const idx = Math.floor(this.offset / REEL_ITEM_W);
         if (idx !== lastIdx) {
           lastIdx = idx;
           this.sfx.wheelTick(0.85 + Math.random() * 0.25);
@@ -175,7 +195,7 @@ class Reel {
   /** Advance exactly one item (the suspense crawl). */
   step(duration: number, onComplete: () => void): void {
     const from = this.offset;
-    const to = from + ITEM_H;
+    const to = from + REEL_ITEM_W;
     Tweens.run({
       duration,
       ease: Easing.backOut,
@@ -194,6 +214,8 @@ class Reel {
   }
 
   updatePulse(time: number): void {
+    // Gentle breathing keeps the altar feeling powered-on at rest.
+    this.marker.alpha = this.looping ? 0.75 : 0.55 + 0.22 * Math.sin(time * 2.4);
     if (this.hot) this.hotGlow.alpha = 0.3 + 0.18 * Math.sin(time * 6);
   }
 }
@@ -207,6 +229,7 @@ class CharacterRail {
   private offset = 0;
   private speed = 1800;
   private hotGlow: Sprite;
+  private marker: Graphics;
 
   constructor(private sfx: Sfx, x: number, y: number) {
     this.wrap.position.set(x, y);
@@ -220,7 +243,20 @@ class CharacterRail {
     const back = new Graphics().roundRect(-4, -4, RAIL_W + 8, RAIL_H + 8, 10).fill(0x0a0b13);
     const mask = new Graphics().roundRect(0, 0, RAIL_W, RAIL_H, 7).fill(Palette.white);
     this.strip.mask = mask;
-    this.wrap.addChild(this.hotGlow, back, this.strip, mask);
+    const shade = new Graphics()
+      .rect(0, 0, 56, RAIL_H)
+      .fill({ color: Palette.black, alpha: 0.5 })
+      .rect(RAIL_W - 56, 0, 56, RAIL_H)
+      .fill({ color: Palette.black, alpha: 0.5 });
+    shade.mask = mask;
+    this.marker = new Graphics()
+      .roundRect(RAIL_W / 2 - RAIL_ITEM_W / 2 + 4, -5, RAIL_ITEM_W - 8, RAIL_H + 10, 8)
+      .stroke({ color: Palette.gold, width: 2, alpha: 0.7 });
+    this.wrap.addChild(this.hotGlow, back, this.strip, mask, shade, this.marker);
+  }
+
+  updatePulse(time: number): void {
+    this.marker.alpha = 0.5 + 0.22 * Math.sin(time * 2.4 + 1);
   }
 
   populate(faces: Container[]): void {
@@ -271,6 +307,13 @@ class CharacterRail {
     return this.faces[index] ?? null;
   }
 
+  /** Rest with legend `index` framed by the payline bracket. */
+  centerOn(index: number): void {
+    const clamped = Math.max(0, Math.min(this.faces.length - 1, index));
+    this.offset = clamped * RAIL_ITEM_W + RAIL_ITEM_W / 2 - RAIL_W / 2;
+    this.apply();
+  }
+
   setHot(color: number, on: boolean): void {
     this.hotGlow.tint = color;
     this.hotGlow.alpha = on ? 0.38 : 0;
@@ -285,6 +328,7 @@ export class SlotScene extends Scene {
   private time = 0;
 
   private spinBtn!: Button;
+  private summonGlow?: Sprite;
   private doneBtn!: Button;
   private storeBtn!: Button;
   private goldText!: Text;
@@ -323,7 +367,7 @@ export class SlotScene extends Scene {
 
     // Two constraint reels sit above the dim layer.
     for (let i = 0; i < 2; i++) {
-      const reel = new Reel(this.game.sfx, REEL_XS[i]!, REEL_Y);
+      const reel = new Reel(this.game.sfx, REEL_WIN_X, REEL_YS[i]!);
       this.reels.push(reel);
       this.addChild(reel.wrap);
     }
@@ -379,20 +423,88 @@ export class SlotScene extends Scene {
     marquee.position.set(422, 101);
     this.addChild(marquee);
 
+    this.buildModifierBadge();
+
+    // Inset display fills the cabinet's original two-window bay so the three
+    // horizontal wheels read as one built-in altar screen.
+    const bayCenter = REEL_WIN_X + REEL_WIN_W / 2;
+    const inset = new Graphics()
+      .roundRect(70, 122, 672, 338, 14)
+      .fill({ color: 0x0a0b13, alpha: 0.96 })
+      .stroke({ color: mix(Palette.gold, Palette.black, 0.55), width: 2 })
+      .roundRect(74, 126, 664, 330, 12)
+      .stroke({ color: mix(Palette.gold, Palette.black, 0.2), width: 1, alpha: 0.4 });
+    this.addChild(inset);
+
     const headers = ['UNIVERSE', 'RARITY'];
-    headers.forEach((h, i) => {
-      const label = new Text({ text: h, style: Type.tiny() });
+    REEL_YS.forEach((reelY, i) => {
+      const frame = new Graphics()
+        .roundRect(REEL_WIN_X - 8, reelY - 8, REEL_WIN_W + 16, REEL_H + 16, 11)
+        .fill({ color: Palette.black, alpha: 0.5 })
+        .stroke({ color: mix(Palette.gold, Palette.black, 0.3), width: 2 })
+        .roundRect(REEL_WIN_X - 4, reelY - 4, REEL_WIN_W + 8, REEL_H + 8, 9)
+        .stroke({ color: mix(Palette.gold, Palette.white, 0.12), width: 1, alpha: 0.45 });
+      this.addChild(frame);
+
+      const label = new Text({ text: headers[i]!, style: Type.tiny() });
       label.style.fill = Palette.gold;
       label.anchor.set(0.5);
-      label.position.set(REEL_XS[i]! + REEL_W / 2, REEL_Y - 12);
+      label.position.set(bayCenter, reelY - 20);
       this.addChild(label);
     });
+
+    // Summon rates — the pull is a gacha, so show the odds (and prove that
+    // Supreme/Godlike exist) the same way the Store spin advertises its own.
+    const ratesTitle = new Text({ text: 'SUMMON RATES', style: Type.tiny() });
+    ratesTitle.style.fill = Palette.textDim;
+    ratesTitle.anchor.set(0.5);
+    ratesTitle.position.set(bayCenter, 408);
+    this.addChild(ratesTitle);
+
+    const odds = this.run.summonOdds();
+    const tiers = Object.keys(odds) as Rarity[];
+    const chipW = REEL_WIN_W / tiers.length;
+    tiers.forEach((tier, i) => {
+      const pct = odds[tier] * 100;
+      const shown = pct === 0 ? '—' : pct < 0.05 ? '<0.1%' : pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+      const chip = new Text({ text: `${RarityLabel[tier]} ${shown}`, style: Type.tiny() });
+      chip.style.fill = RarityColor[tier];
+      chip.anchor.set(0.5);
+      chip.position.set(REEL_WIN_X + chipW * (i + 0.5), 430);
+      if (chip.width > chipW - 6) chip.scale.set((chipW - 6) / chip.width);
+      this.addChild(chip);
+    });
+
     const railLabel = new Text({ text: 'AVAILABLE LEGENDS', style: Type.tiny() });
     railLabel.style.fill = Palette.gold;
     railLabel.anchor.set(0.5);
     railLabel.position.set(RAIL_X + RAIL_W / 2, RAIL_Y - 10);
     this.addChild(railLabel);
 
+  }
+
+  /** Compact banner of active run modifiers (only shown on a challenge run). */
+  private buildModifierBadge(): void {
+    const ids = [...this.run.modifiers];
+    if (ids.length === 0) return;
+    const label = ids
+      .map((id) => {
+        const mod = getModifier(id);
+        if (id === 'mono-universe' && this.run.monoFranchise) return `${mod.icon} ${getFranchise(this.run.monoFranchise).name} ONLY`;
+        return `${mod.icon} ${mod.name.toUpperCase()}`;
+      })
+      .join('    ');
+    const text = new Text({ text: label, style: Type.tiny() });
+    text.style.fill = Palette.gold;
+    text.style.fontSize = 12;
+    text.anchor.set(0.5);
+    text.position.set(422, 74);
+    if (text.width > 640) text.scale.set(640 / text.width);
+    const pill = new Graphics()
+      .roundRect(422 - text.width / 2 - 16, 74 - 12, text.width + 32, 24, 12)
+      .fill({ color: Palette.black, alpha: 0.5 })
+      .stroke({ color: mix(Palette.gold, Palette.black, 0.35), width: 1 });
+    this.addChild(pill, text);
   }
 
   private openSettings(): void {
@@ -455,11 +567,21 @@ export class SlotScene extends Scene {
     this.spinsText.position.set(1102, 51);
     this.addChild(this.goldText, this.spinsText);
 
+    this.summonGlow = new Sprite(glowTexture());
+    this.summonGlow.anchor.set(0.5);
+    this.summonGlow.tint = Palette.gold;
+    this.summonGlow.blendMode = 'add';
+    this.summonGlow.width = 480;
+    this.summonGlow.height = 96;
+    this.summonGlow.position.set(357, 652);
+    this.summonGlow.alpha = 0;
+    this.addChild(this.summonGlow);
+
     this.spinBtn = new Button('SUMMON', this.game.sfx, {
       width: 420,
       height: 52,
       variant: 'transparent',
-      onClick: () => this.doSpin(),
+      onClick: () => (this.run.draft ? this.startDraft() : this.doSpin()),
     });
     this.spinBtn.position.set(357, 652);
     this.addChild(this.spinBtn);
@@ -554,9 +676,51 @@ export class SlotScene extends Scene {
   private idlePopulate(): void {
     const franchises = Object.values(FRANCHISES);
     const rarities = Object.keys(Balance.rarity.weights) as Rarity[];
-    this.reels[0]!.populate(Array.from({ length: Math.max(4, franchises.length) }, (_, i) => this.franchiseFace(franchises[i % franchises.length]!)));
+    this.reels[0]!.populate(Array.from({ length: Math.max(6, franchises.length) }, (_, i) => this.franchiseFace(franchises[i % franchises.length]!)));
     this.reels[1]!.populate(Array.from({ length: 8 }, (_, i) => this.rarityFace(rarities[i % rarities.length]!)));
     this.characterRail.populate(CHARACTERS.map((character) => this.characterFace(character)));
+    // Rest with a real item framed under each payline bracket, not the gap between two.
+    this.reels[0]!.centerOn(2);
+    this.reels[1]!.centerOn(2);
+    this.characterRail.centerOn(2);
+  }
+
+  /** First-run welcome shown in the archive before any legend is recruited. */
+  private buildArchiveOnboarding(): Container {
+    const intro = new Container();
+    const heading = new Text({ text: 'WELCOME, SUMMONER', style: Type.h3() });
+    heading.style.fill = Palette.gold;
+    heading.style.fontSize = 18;
+    heading.position.set(8, 10);
+
+    const blurb = new Text({ text: 'Pull legends from every universe, then build a squad of five and climb the tower.', style: Type.bodyDim() });
+    blurb.style.wordWrap = true;
+    blurb.style.wordWrapWidth = 384;
+    blurb.position.set(8, 40);
+
+    const steps = [
+      '1.   SUMMON to recruit legends',
+      '2.   Set your FORMATION — 3 front, 2 back',
+      '3.   Battle upward; every floor pays coins',
+    ];
+    const stepNodes = steps.map((text, i) => {
+      const node = new Text({ text, style: Type.body() });
+      node.position.set(14, 96 + i * 30);
+      return node;
+    });
+
+    const tipBg = new Graphics()
+      .roundRect(6, 196, 392, 60, 8)
+      .fill({ color: Palette.panelLight, alpha: 0.5 })
+      .stroke({ color: mix(Palette.blue, Palette.black, 0.4), width: 1 });
+    const tip = new Text({ text: 'SYNERGY TIP: legends that share a tag empower the team — e.g. two Anime heroes grant bonus Crit, three Heroes add HP.', style: Type.small() });
+    tip.style.fill = Palette.blue;
+    tip.style.wordWrap = true;
+    tip.style.wordWrapWidth = 372;
+    tip.position.set(16, 205);
+
+    intro.addChild(heading, blurb, ...stepNodes, tipBg, tip);
+    return intro;
   }
 
   // ── HUD ─────────────────────────────────────────────────────────────────
@@ -564,7 +728,8 @@ export class SlotScene extends Scene {
     const run = this.run;
     this.goldText.text = `FLOOR ${run.floor}  |  ${run.gold.toLocaleString('en-US')} COINS`;
     this.spinsText.text = run.spins > 0 ? `FREE PULLS  ${run.spins}` : `NEXT SUMMON  ${run.spinCost}`;
-    this.spinBtn.setLabel(run.spins > 0 ? `SUMMON - FREE x${run.spins}` : `SUMMON - ${run.spinCost} COINS`);
+    const verb = run.draft ? 'DRAFT' : 'SUMMON';
+    this.spinBtn.setLabel(run.spins > 0 ? `${verb} - FREE x${run.spins}` : `${verb} - ${run.spinCost} COINS`);
     this.spinBtn.setEnabled(!this.spinning && run.canSpin);
     this.doneBtn.setEnabled(!this.spinning && run.teamSize() > 0);
     this.storeBtn.setEnabled(!this.spinning);
@@ -583,9 +748,7 @@ export class SlotScene extends Scene {
       this.rosterGrid.addChild(card);
     });
     if (run.roster.length === 0) {
-      const hint = new Text({ text: 'Summon your first legend to begin the archive.', style: Type.bodyDim() });
-      hint.position.set(10, 20);
-      this.rosterGrid.addChild(hint);
+      this.rosterGrid.addChild(this.buildArchiveOnboarding());
     }
     const rows = Math.ceil(run.roster.length / 3);
     const contentHeight = rows > 0 ? rows * (CARD_H * scale + 12) - 12 : 0;
@@ -621,6 +784,58 @@ export class SlotScene extends Scene {
       .roundRect(417, thumbY, 5, thumbH, 3).fill({ color: Palette.gold, alpha: 0.8 });
   }
 
+  /** Draft recruiting: pay a pull, then choose one of several offered legends. */
+  private startDraft(): void {
+    if (this.spinning || !this.run.canSpin) return;
+    this.spinning = true;
+    this.run.payForRecruit();
+    this.refreshHud();
+    this.game.sfx.spinStart();
+
+    const options = this.run.rollDraftOptions(3);
+    const overlay = new Container();
+    const dim = new Graphics().rect(0, 0, W, H).fill({ color: Palette.black, alpha: 0.85 });
+    dim.eventMode = 'static';
+    overlay.addChild(dim);
+    const title = new Text({ text: 'DRAFT A LEGEND', style: Type.h1() });
+    title.anchor.set(0.5);
+    title.position.set(W / 2, 96);
+    const hint = new Text({ text: 'Choose one to join your archive', style: Type.bodyDim() });
+    hint.anchor.set(0.5);
+    hint.position.set(W / 2, 134);
+    overlay.addChild(title, hint);
+
+    const scale = 0.98;
+    const cardW = CARD_W * scale;
+    const gap = 44;
+    const totalW = options.length * cardW + (options.length - 1) * gap;
+    options.forEach((def, index) => {
+      const card = new CharacterCard(def, { mode: 'roster', level: 1 });
+      card.scale.set(scale);
+      const x = W / 2 - totalW / 2 + index * (cardW + gap) + cardW / 2;
+      card.position.set(x, H / 2 + 24);
+      card.eventMode = 'static';
+      card.cursor = 'pointer';
+      card.on('pointerover', () => {
+        this.game.sfx.hover();
+        Tweens.to(card.scale, { x: scale * 1.05, y: scale * 1.05 }, { duration: 0.12, ease: Easing.quadOut });
+      });
+      card.on('pointerout', () => Tweens.to(card.scale, { x: scale, y: scale }, { duration: 0.14 }));
+      card.on('pointerdown', () => {
+        this.game.sfx.click();
+        this.removeChild(overlay);
+        overlay.destroy({ children: true });
+        this.ceremony(def, REVEAL_TIER[def.rarity], RarityColor[def.rarity]);
+      });
+      card.alpha = 0;
+      Tweens.to(card, { alpha: 1 }, { duration: 0.3, delay: 0.08 * index, ease: Easing.quadOut });
+      overlay.addChild(card);
+    });
+    this.addChild(overlay);
+    overlay.alpha = 0;
+    Tweens.to(overlay, { alpha: 1 }, { duration: 0.18 });
+  }
+
   private doSpin(): void {
     if (this.spinning || !this.run.canSpin) return;
     this.spinning = true;
@@ -653,7 +868,7 @@ export class SlotScene extends Scene {
       for (let k = 0; k < 8; k++) tail.push(this.franchiseFace(franchises[Math.floor(Math.random() * franchises.length)]!));
       tail.push(this.franchiseFace(getFranchise(def.franchise)));
       tail.push(this.franchiseFace(franchises[Math.floor(Math.random() * franchises.length)]!));
-      const leadIn = Array.from({ length: 3 }, (_, i) => this.franchiseFace(franchises[i % franchises.length]!));
+      const leadIn = Array.from({ length: REEL_LEAD }, (_, i) => this.franchiseFace(franchises[i % franchises.length]!));
       this.reels[0]!.beginStop(tail, tail.length - 2, leadIn, () => {
         this.game.sfx.reelStop();
         this.game.shake(2, 0.12);
@@ -673,7 +888,7 @@ export class SlotScene extends Scene {
       }
       tail.push(this.rarityFace(def.rarity));
       tail.push(this.rarityFace(available[0]!));
-      const leadIn = Array.from({ length: 3 }, (_, i) => this.rarityFace(available[i % available.length]!));
+      const leadIn = Array.from({ length: REEL_LEAD }, (_, i) => this.rarityFace(available[i % available.length]!));
       this.reels[1]!.beginStop(tail, tail.length - 2, leadIn, () => {
         this.game.sfx.reelStop();
         this.game.shake(3, 0.15);
@@ -838,6 +1053,11 @@ export class SlotScene extends Scene {
     for (const reel of this.reels) {
       reel.update(dt);
       reel.updatePulse(this.time);
+    }
+    this.characterRail.updatePulse(this.time);
+    if (this.summonGlow) {
+      const ready = !this.spinning && (this.game.run?.canSpin ?? false);
+      this.summonGlow.alpha = ready ? 0.22 + 0.12 * Math.sin(this.time * 3) : 0;
     }
   }
 }

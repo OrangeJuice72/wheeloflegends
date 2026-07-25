@@ -14,27 +14,39 @@ export const CURATED_RARITY: Readonly<Record<string, Rarity>> = {
   'green-lantern': 'legendary', joker: 'epic', aquaman: 'epic', darkseid: 'godlike', 'harley-quinn': 'rare',
   // Anime
   goku: 'godlike', luffy: 'supreme', nami: 'rare', naruto: 'supreme', saitama: 'godlike', 'yuji-itadori': 'epic',
+  zoro: 'legendary', nobara: 'rare',
   // Pokémon
   mewtwo: 'supreme', charizard: 'epic', venusaur: 'rare', blastoise: 'rare', gengar: 'rare', pikachu: 'common',
+  arceus: 'godlike', 'mega-rayquaza': 'godlike', lugia: 'supreme', 'ho-oh': 'supreme', garchomp: 'legendary',
+  dragonite: 'legendary', greninja: 'epic', lucario: 'epic', sylveon: 'rare', glaceon: 'rare', jolteon: 'rare',
+  mimikyu: 'rare', eevee: 'common', cubone: 'common',
   // Cinema
   godzilla: 'supreme', 'john-wick': 'epic', gandalf: 'godlike', 'indiana-jones': 'common', 'king-kong': 'legendary',
-  robocop: 'epic', terminator: 'legendary', zorro: 'common',
+  robocop: 'epic', terminator: 'legendary', zorro: 'common', ghostface: 'rare',
   // Star Wars
   'darth-vader': 'supreme', chewbacca: 'common', 'luke-skywalker': 'supreme', 'princess-leia': 'epic',
-  'r2-d2': 'common', yoda: 'godlike',
+  'r2-d2': 'common', yoda: 'godlike', grogu: 'epic',
   // Marvel
   thor: 'supreme', 'iron-man': 'legendary', 'captain-america': 'legendary', 'black-panther': 'common',
   'doctor-strange': 'supreme', hulk: 'supreme', loki: 'legendary', 'scarlet-witch': 'supreme',
-  spiderman: 'legendary', thanos: 'godlike', wolverine: 'legendary',
+  spiderman: 'legendary', thanos: 'godlike', wolverine: 'legendary', deadpool: 'legendary', 'doctor-doom': 'supreme',
   // Disney
   elsa: 'legendary', ariel: 'epic', genie: 'supreme', hercules: 'legendary', hook: 'rare', mulan: 'epic',
-  olaf: 'common', simba: 'common', 'tinker-bell': 'rare',
+  olaf: 'common', simba: 'common', 'tinker-bell': 'rare', stitch: 'legendary', lilo: 'common',
+  'scrooge-mcduck': 'rare', 'buzz-lightyear': 'epic', rapunzel: 'epic', 'chip-&-dale': 'rare', 'darkwing-duck': 'epic',
   // Mario
   bowser: 'legendary', mario: 'supreme', luigi: 'epic', peach: 'epic', daisy: 'rare', rosalina: 'legendary',
   toad: 'common', yoshi: 'common', 'king-boo': 'rare',
+  dk: 'legendary', wario: 'epic', 'petey-piranha': 'epic', 'king-bob-omb': 'rare', kamek: 'rare',
+  birdo: 'rare', 'chain-chomp': 'rare', 'dry-bones': 'common', 'shy-guy': 'common',
   // Toons / Nintendo
   sonic: 'supreme', shrek: 'common', aang: 'supreme', 'danny-phantom': 'common',
+  'bart-simpson': 'common', chase: 'common', skye: 'rare',
+  'ben-10': 'epic', courage: 'common', dexter: 'rare', 'finn-&-jake': 'legendary', 'gumball-&-darwin': 'rare',
+  'lincoln-loud': 'common', 'pinky-&-the-brain': 'rare', 'powerpuff-girls': 'legendary', 'tom-&-jerry': 'rare',
   link: 'supreme', zelda: 'legendary',
+  'samus-aran': 'supreme', kirby: 'legendary', 'captain-falcon': 'epic', 'fox-mccloud': 'epic',
+  'little-mac': 'rare', 'olimar-&-pikmin': 'rare', 'inkling-girl': 'rare', 'duck-hunt-duo': 'common', 'tom-nook': 'common',
   // SpongeBob
   spongebob: 'legendary', patrick: 'epic', gary: 'common', 'mr-krabs': 'rare', 'sandy-cheeks': 'common', squidward: 'rare',
   // TMNT

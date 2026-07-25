@@ -8,17 +8,56 @@ import { Balance } from '../data/balance';
 import { CHARACTERS, getCharacter } from '../data/characters';
 import type { CharacterDef, Rarity } from '../data/types';
 import { effectiveItemBoosts, getShopItem, ITEM_SPIN_PRICES, ITEM_SPIN_WEIGHTS, MYSTERY_ITEM_WEIGHTS, SHOP_ITEMS } from '../data/items';
-import type { ItemTier, ShopItemDef } from '../data/items';
+import type { ItemBoosts, ItemTier, ShopItemDef } from '../data/items';
+import type { ModifierId } from '../data/modifiers';
 import type { CombatantSpec } from './battle';
 import type { BattleResult } from './events';
-import { generateFloor, type FloorInfo } from './tower';
+import { generateConquestNode, generateFloor, type FloorInfo } from './tower';
 import type { Difficulty } from '../core/Save';
+
+/** Run structure. 'tower' is the endless climb; 'conquest' is a universe ladder. */
+export type GameMode = 'tower' | 'conquest';
+
+export interface RunOptions {
+  mode?: GameMode;
+  /** Draft recruiting: choose 1 of several offers instead of a random pull. */
+  draft?: boolean;
+}
 
 export interface RosterEntry {
   defId: string;
   level: number;
   hpPct: number; // persistent health across floors (the roguelite pressure)
   heldItemId: string | null;
+}
+
+/** Universes that actually have recruitable legends, in stable roster order. */
+export function populatedFranchises(): string[] {
+  return [...new Set(CHARACTERS.map((c) => c.franchise))];
+}
+
+/**
+ * Ground-truth probability of each rarity for a given recruit pool under the
+ * universe-first summon: every populated universe is equally likely, then
+ * rarity is drawn by the intended weights renormalized over the tiers that
+ * universe actually offers. The spin logic and the on-screen SUMMON RATES
+ * both read from this, so the displayed odds can never drift from reality.
+ */
+export function summonRarityOddsForPool(pool: readonly CharacterDef[]): Record<Rarity, number> {
+  const franchises = [...new Set(pool.map((c) => c.franchise))];
+  const odds: Record<Rarity, number> = { common: 0, rare: 0, epic: 0, legendary: 0, supreme: 0, godlike: 0 };
+  if (franchises.length === 0) return odds;
+  for (const franchise of franchises) {
+    const rarities = [...new Set(pool.filter((c) => c.franchise === franchise).map((c) => c.rarity))];
+    const totalWeight = rarities.reduce((sum, r) => sum + Balance.rarity.weights[r], 0);
+    for (const r of rarities) odds[r] += (1 / franchises.length) * (Balance.rarity.weights[r] / totalWeight);
+  }
+  return odds;
+}
+
+/** Default summon odds over the full roster (no modifiers). */
+export function summonRarityOdds(): Record<Rarity, number> {
+  return summonRarityOddsForPool(CHARACTERS);
 }
 
 export interface RewardChoice {
@@ -56,12 +95,49 @@ export class RunState {
   battlefieldId: string | null = null;
   difficulty: Difficulty;
 
-  constructor(seed: number, difficulty: Difficulty = 'normal') {
+  /** Active run modifiers (mutators). Empty for a standard climb. */
+  readonly modifiers: ReadonlySet<ModifierId>;
+  /** When Mono-Universe is active, the single universe summons are locked to. */
+  readonly monoFranchise: string | null;
+  /** Run structure: endless tower or a fixed universe-conquest ladder. */
+  readonly mode: GameMode;
+  /** Draft recruiting instead of random pulls. */
+  readonly draft: boolean;
+  /** Universes to conquer, in order (conquest mode only). */
+  readonly conquestOrder: readonly string[];
+
+  constructor(seed: number, difficulty: Difficulty = 'normal', modifiers: readonly ModifierId[] = [], options: RunOptions = {}) {
     this.seed = seed;
     this.difficulty = difficulty;
+    this.modifiers = new Set(modifiers);
+    this.mode = options.mode ?? 'tower';
+    this.draft = options.draft ?? false;
     const root = new Rng(seed);
     this.rng = root.fork();
     this.battleRng = root.fork();
+    // Meta draws on their own stream so they never disturb recruit/battle sequences.
+    const meta = root.fork();
+    this.monoFranchise = this.modifiers.has('mono-universe') ? meta.pick(populatedFranchises()) : null;
+    this.conquestOrder = this.mode === 'conquest' ? meta.shuffle(populatedFranchises()) : [];
+  }
+
+  // ── conquest ───────────────────────────────────────────────────────────
+  isConquest(): boolean {
+    return this.mode === 'conquest';
+  }
+
+  /** Universe the current node fights, or null once every universe is conquered. */
+  conquestTarget(): string | null {
+    return this.conquestOrder[this.floor - 1] ?? null;
+  }
+
+  /** True once the final universe has been cleared (floor advanced past the ladder). */
+  conquestComplete(): boolean {
+    return this.mode === 'conquest' && this.floor > this.conquestOrder.length;
+  }
+
+  hasModifier(id: ModifierId): boolean {
+    return this.modifiers.has(id);
   }
 
   // ── recruiting ─────────────────────────────────────────────────────────
@@ -73,20 +149,64 @@ export class RunState {
     return this.spins > 0 || this.gold >= this.spinCost;
   }
 
-  /** Consumes a free spin or gold. Returns the recruited character. */
-  spin(): CharacterDef {
+  /** Characters a summon may yield, after modifier constraints. */
+  eligibleRecruitPool(): CharacterDef[] {
+    let pool: CharacterDef[] = CHARACTERS;
+    if (this.monoFranchise) pool = pool.filter((c) => c.franchise === this.monoFranchise);
+    if (this.hasModifier('underdog')) pool = pool.filter((c) => c.rarity === 'common' || c.rarity === 'rare');
+    return pool;
+  }
+
+  /** True summon odds for THIS run (honors modifiers), shown on the altar. */
+  summonOdds(): Record<Rarity, number> {
+    return summonRarityOddsForPool(this.eligibleRecruitPool());
+  }
+
+  /** Consumes a free spin, else gold. Throws if neither is available. */
+  payForRecruit(): void {
     if (this.spins > 0) {
       this.spins--;
-    } else {
-      if (this.gold < this.spinCost) throw new Error('Cannot afford spin');
-      this.gold -= this.spinCost;
-      this.spinsBought++;
+      return;
     }
-    const rarity = this.rng.weighted(
-      Object.keys(Balance.rarity.weights) as Rarity[],
-      (r) => Balance.rarity.weights[r],
-    );
-    return this.rng.pick(CHARACTERS.filter((c) => c.rarity === rarity));
+    if (this.gold < this.spinCost) throw new Error('Cannot afford spin');
+    this.gold -= this.spinCost;
+    this.spinsBought++;
+  }
+
+  /** One universe-first draw from a pool (no payment, no side effects). */
+  private drawRecruit(pool: readonly CharacterDef[]): CharacterDef {
+    // Universe first — every populated universe (within the pool) is equally likely.
+    const franchises = [...new Set(pool.map((c) => c.franchise))];
+    const franchise = this.rng.pick(franchises);
+    const inFranchise = pool.filter((c) => c.franchise === franchise);
+    // Rarity — intended weights, renormalized over the tiers this universe offers.
+    const availableRarities = [...new Set(inFranchise.map((c) => c.rarity))];
+    const rarity = this.rng.weighted(availableRarities, (r) => Balance.rarity.weights[r]);
+    // Character — uniform among this universe's legends of that rarity.
+    return this.rng.pick(inFranchise.filter((c) => c.rarity === rarity));
+  }
+
+  /** Consumes a free spin or gold. Returns the recruited character. */
+  spin(): CharacterDef {
+    this.payForRecruit();
+    return this.drawRecruit(this.eligibleRecruitPool());
+  }
+
+  /** Distinct draft offers for the pick-one recruiting style (no payment). */
+  rollDraftOptions(count: number): CharacterDef[] {
+    const pool = this.eligibleRecruitPool();
+    const distinctIds = new Set(pool.map((c) => c.id));
+    const target = Math.min(count, distinctIds.size);
+    const offers: CharacterDef[] = [];
+    const chosen = new Set<string>();
+    let guard = 0;
+    while (offers.length < target && guard++ < 500) {
+      const pick = this.drawRecruit(pool);
+      if (chosen.has(pick.id)) continue;
+      chosen.add(pick.id);
+      offers.push(pick);
+    }
+    return offers;
   }
 
   /** Add to roster; duplicates become +1 level (returns 'leveled'). */
@@ -158,9 +278,11 @@ export class RunState {
 
   // ── battle ─────────────────────────────────────────────────────────────
   currentFloor(): FloorInfo {
-    // Floor layout is a pure function of (seed, floor) so re-entry is stable.
+    // Node/floor layout is a pure function of (seed, floor) so re-entry is stable.
     const rng = new Rng((this.seed ^ (this.floor * 0x9e3779b9)) >>> 0);
-    const generated = generateFloor(this.floor, rng);
+    const generated = this.mode === 'conquest'
+      ? generateConquestNode(this.floor, this.conquestTarget() ?? this.conquestOrder[this.conquestOrder.length - 1]!, this.conquestOrder.length, rng)
+      : generateFloor(this.floor, rng);
     const difficultyScale = Balance.difficulty[this.difficulty];
     const levelBonus = Balance.difficultyLevelBonus[this.difficulty];
     return {
@@ -177,8 +299,15 @@ export class RunState {
     return Math.floor(this.battleRng.next() * 4294967296);
   }
 
+  /** Per-stat deltas from modifiers, applied on top of items and synergies. */
+  private modifierStatBoosts(): ItemBoosts | undefined {
+    if (!this.hasModifier('glass-cannon')) return undefined;
+    return { atk: 0.4, hp: -0.35 };
+  }
+
   playerSpecs(): CombatantSpec[] {
     const specs: CombatantSpec[] = [];
+    const extraBoosts = this.modifierStatBoosts();
     for (let slot = 0; slot < this.team.length; slot++) {
       const idx = this.team[slot];
       if (idx === null || idx === undefined) continue;
@@ -196,6 +325,7 @@ export class RunState {
         itemBoosts: entry.heldItemId
           ? effectiveItemBoosts(getShopItem(entry.heldItemId), getCharacter(entry.defId))
           : undefined,
+        extraBoosts,
       });
     }
     return specs;
@@ -211,8 +341,10 @@ export class RunState {
       if (specIdx === null) continue;
       const entry = this.roster[specIdx];
       if (!entry) continue;
-      // Survivors keep their remaining HP; the fallen are patched up to 20%.
-      entry.hpPct = u.alive ? Math.max(0.05, u.hpPct) : 0.2;
+      // Survivors keep their remaining HP; the fallen are patched up — but only
+      // to a sliver under Sudden Death, where recovery is scarce.
+      const revivePct = this.hasModifier('sudden-death') ? 0.1 : 0.2;
+      entry.hpPct = u.alive ? Math.max(0.05, u.hpPct) : revivePct;
       this.kills += u.kills;
     }
     if (result.winner === 'player') {
@@ -360,12 +492,25 @@ export class RunState {
     }
     if (this.teamCostCap < Balance.team.maxCostCap) power.push({ id: 'command-emblem', title: 'Command Emblem', desc: 'Permanently gain +1 formation cost capacity this run.', icon: '\u{1F451}', tier: 'epic', category: 'power', apply: (run) => { run.teamCostCap = Math.min(Balance.team.maxCostCap, run.teamCostCap + 1); } });
 
-    const choices = [this.rng.pick(economy), this.rng.pick(recovery), this.rng.pick(power), this.rng.pick(gear)];
-    if (boss) {
-      const used = new Set(choices.map((choice) => choice.id));
-      const bonusPool = [...economy, ...recovery, ...power, ...gear].filter((choice) => !used.has(choice.id));
-      if (bonusPool.length > 0) choices.push(this.rng.pick(bonusPool));
-    }
-    return this.rng.shuffle(choices).slice(0, boss ? R.bossChoices : R.choices);
+    // Sudden Death removes the whole recovery category; the slot is topped up
+    // from the other pools so the player still gets a full spread of choices.
+    const suddenDeath = this.hasModifier('sudden-death');
+    const categories = suddenDeath ? [economy, power, gear] : [economy, recovery, power, gear];
+    const target = boss ? R.bossChoices : R.choices;
+
+    const choices: RewardChoice[] = [];
+    const used = new Set<string>();
+    const takeFrom = (pool: RewardChoice[]): void => {
+      const available = pool.filter((choice) => !used.has(choice.id));
+      if (available.length === 0) return;
+      const pick = this.rng.pick(available);
+      choices.push(pick);
+      used.add(pick.id);
+    };
+    for (const pool of categories) takeFrom(pool);
+    const fillPool = [economy, power, gear, ...(suddenDeath ? [] : [recovery])].flat();
+    while (choices.length < target && fillPool.some((choice) => !used.has(choice.id))) takeFrom(fillPool);
+
+    return this.rng.shuffle(choices).slice(0, target);
   }
 }

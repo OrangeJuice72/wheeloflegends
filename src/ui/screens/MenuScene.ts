@@ -10,12 +10,15 @@ import { Button } from '../components/Button';
 import { backgroundTexture } from '../portraits';
 import { H, Palette, Type, W } from '../theme';
 import { SlotScene } from './SlotScene';
+import { ConquestMapScene } from './ConquestMapScene';
 import { FeatheredBackground } from '../fx/FeatheredBackground';
 import { SettingsModal } from '../components/SettingsModal';
+import { RunSetupModal, type RunConfig } from '../components/RunSetupModal';
 
 export class MenuScene extends Scene {
   private background?: FeatheredBackground;
   private playHotspot?: Graphics;
+  private lastConfig: RunConfig = { mode: 'tower', draft: false, modifiers: [] };
 
   constructor(game: Game) {
     super(game);
@@ -88,6 +91,33 @@ export class MenuScene extends Scene {
     });
     settingsBtn.position.set(W - 155, 44);
     this.addChild(settingsBtn, muteBtn);
+
+    const challengeBtn = new Button('⚔  NEW RUN', this.game.sfx, {
+      width: 168,
+      height: 44,
+      variant: 'ghost',
+      onClick: () => this.openSetup(),
+    });
+    challengeBtn.position.set(106, 44);
+    this.addChild(challengeBtn);
+  }
+
+  private openSetup(): void {
+    const modal = new RunSetupModal(
+      this.game.sfx,
+      this.lastConfig,
+      (config) => {
+        this.lastConfig = config;
+        this.removeChild(modal);
+        modal.destroy({ children: true });
+        this.startRun(config);
+      },
+      () => {
+        this.removeChild(modal);
+        modal.destroy({ children: true });
+      },
+    );
+    this.addChild(modal);
   }
 
   private openSettings(): void {
@@ -116,10 +146,13 @@ export class MenuScene extends Scene {
     this.playHotspot.scale.set(art.scale.x, art.scale.y);
   }
 
-  private startRun(): void {
-    this.game.run = new RunState(randomSeed(), this.game.meta.difficulty);
+  private startRun(config: RunConfig = { mode: 'tower', draft: false, modifiers: [] }): void {
+    this.game.run = new RunState(randomSeed(), this.game.meta.difficulty, config.modifiers, {
+      mode: config.mode,
+      draft: config.draft,
+    });
     this.game.meta.totalRuns++;
     this.game.saveMeta();
-    this.game.goto(new SlotScene(this.game));
+    this.game.goto(config.mode === 'conquest' ? new ConquestMapScene(this.game) : new SlotScene(this.game));
   }
 }

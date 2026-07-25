@@ -12,6 +12,7 @@ import { Panel } from '../components/Panel';
 import { Palette, Type, W } from '../theme';
 import { MenuScene } from './MenuScene';
 import { SlotScene } from './SlotScene';
+import { ConquestMapScene } from './ConquestMapScene';
 
 export class SummaryScene extends Scene {
   constructor(game: Game) {
@@ -24,14 +25,21 @@ export class SummaryScene extends Scene {
       this.game.goto(new MenuScene(this.game));
       return;
     }
-    const newBest = run.floor >= this.game.meta.bestFloor && run.floor > 1;
+    const victory = run.conquestComplete();
+    const newBest = !victory && run.floor >= this.game.meta.bestFloor && run.floor > 1;
 
-    const banner = new Text({ text: 'THE TOWER CLAIMS YOU', style: Type.banner(Palette.danger) });
+    const banner = new Text({
+      text: victory ? '★  UNIVERSES CONQUERED  ★' : 'THE TOWER CLAIMS YOU',
+      style: Type.banner(victory ? Palette.gold : Palette.danger),
+    });
     banner.anchor.set(0.5);
     banner.position.set(W / 2, 100);
     this.addChild(banner);
 
-    const floorText = new Text({ text: `FELL ON FLOOR ${run.floor}`, style: Type.h1() });
+    const floorText = new Text({
+      text: victory ? `ALL ${run.conquestOrder.length} UNIVERSES SUBDUED` : `FELL ON FLOOR ${run.floor}`,
+      style: Type.h1(),
+    });
     floorText.anchor.set(0.5);
     floorText.position.set(W / 2, 170);
     this.addChild(floorText);
@@ -85,14 +93,20 @@ export class SummaryScene extends Scene {
     });
     this.addChild(leaders);
 
-    const again = new Button('🎰   CLIMB AGAIN', this.game.sfx, {
+    const again = new Button(run.isConquest() ? '🌌   CONQUER AGAIN' : '🎰   CLIMB AGAIN', this.game.sfx, {
       width: 280,
       height: 60,
       onClick: () => {
-        this.game.run = new RunState(randomSeed(), this.game.meta.difficulty);
+        // Carry the same mode, recruit style, and modifiers into the next run.
+        const prev = this.game.run;
+        const modifiers = [...(prev?.modifiers ?? [])];
+        this.game.run = new RunState(randomSeed(), this.game.meta.difficulty, modifiers, {
+          mode: prev?.mode ?? 'tower',
+          draft: prev?.draft ?? false,
+        });
         this.game.meta.totalRuns++;
         this.game.saveMeta();
-        this.game.goto(new SlotScene(this.game));
+        this.game.goto(prev?.mode === 'conquest' ? new ConquestMapScene(this.game) : new SlotScene(this.game));
       },
     });
     again.position.set(W / 2 - 160, 560);

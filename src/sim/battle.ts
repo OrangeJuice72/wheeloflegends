@@ -21,6 +21,8 @@ export interface CombatantSpec {
   statScale: number; // floor scaling (enemy) or relic scaling (player)
   itemBoosts?: ItemBoosts;
   itemId?: string;
+  /** Always-applied per-stat deltas from run modifiers; stacks on top of items. */
+  extraBoosts?: ItemBoosts;
   boss?: boolean;
 }
 
@@ -96,8 +98,9 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
   const bossMult = spec.boss ? Balance.tower.bossStatMult : 1;
   const heldItem = spec.itemId ? getShopItem(spec.itemId) : undefined;
   const item = heldItem ? effectiveItemBoosts(heldItem, def) : spec.itemBoosts ?? {};
-  const hpMult = levelMult * spec.statScale * bossMult * (1 + synergyBonus.hp + (item.hp ?? 0));
-  const atkMult = levelMult * spec.statScale * bossMult * (1 + synergyBonus.atk + (item.atk ?? 0));
+  const extra = spec.extraBoosts ?? {};
+  const hpMult = levelMult * spec.statScale * bossMult * Math.max(0.1, 1 + synergyBonus.hp + (item.hp ?? 0) + (extra.hp ?? 0));
+  const atkMult = levelMult * spec.statScale * bossMult * (1 + synergyBonus.atk + (item.atk ?? 0) + (extra.atk ?? 0));
 
   let regen = synergyBonus.regenPerSec;
   let dodge = 0;
@@ -122,9 +125,9 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     maxHp,
     hp: Math.max(1, Math.round(maxHp * spec.hpPct)),
     baseAtk: Math.round(def.stats.atk * atkMult),
-    baseDef: def.stats.def * (1 + synergyBonus.def + (item.def ?? 0)),
-    baseSpd: def.stats.spd * (1 + synergyBonus.spd + (item.spd ?? 0)),
-    baseCrit: def.stats.crit + synergyBonus.crit + (item.crit ?? 0),
+    baseDef: def.stats.def * (1 + synergyBonus.def + (item.def ?? 0) + (extra.def ?? 0)),
+    baseSpd: def.stats.spd * (1 + synergyBonus.spd + (item.spd ?? 0) + (extra.spd ?? 0)),
+    baseCrit: def.stats.crit + synergyBonus.crit + (item.crit ?? 0) + (extra.crit ?? 0),
     critDmg: def.stats.critDmg,
     energyGainMult: 1 + synergyBonus.energyGain + (item.energyGain ?? 0),
     itemName: heldItem?.name,

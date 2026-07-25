@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell(npm install --no-audit --no-fund)",
+      "PowerShell(npx vitest run 2>$null)",
+      "PowerShell(npx tsc --noEmit)",
+      "PowerShell(\\(Get-Content \"src\\\\ui\\\\screens\\\\RecruitScene.ts\" -Raw\\) -replace 'this\\\\.game\\\\.tweenSafeDelay\\\\\\(', 'Tweens.delay\\(' | Set-Content \"src\\\\ui\\\\screens\\\\RecruitScene.ts\" -Encoding utf8 -NoNewline)",
+      "PowerShell($chars = Select-String -Path \"src\\\\data\\\\characters.ts\" -Pattern \"^\\\\s+id: '\" | Measure-Object; Write-Output \"character defs: $\\($chars.Count\\)\"; Get-ChildItem src\\\\assets -Directory | ForEach-Object { \"$\\($_.Name\\): $\\(\\(Get-ChildItem $_.FullName -File | Where-Object Name -notmatch 'README'\\).Count\\) files\" })",
+      "PowerShell(\\(Select-String -Path \"src\\\\data\\\\characters.ts\" -Pattern \"^\\\\s+franchise: '\"\\).Count; \\(Select-String -Path \"src\\\\ui\\\\portraits.ts\" -Pattern \"itemUrls|items/\"\\).Count)",
+      "PowerShell(Get-Content \"src\\\\data\\\\franchises.ts\" -Encoding utf8 | Select-Object -First 40; Write-Output \"=== franchise usage ===\"; Select-String -Path \"src\\\\data\\\\characters.ts\" -Pattern \"franchise: '\\([a-z-]+\\)'\" -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Group-Object | Sort-Object Count -Descending | ForEach-Object { \"$\\($_.Name\\): $\\($_.Count\\)\" })",
+      "PowerShell(Write-Output \"=== run.ts rollMysteryItem ===\"; Get-Content \"src\\\\sim\\\\run.ts\" -Encoding utf8 | Select-Object -Skip 240 -First 60; Write-Output \"=== events.ts choice/act ===\"; Select-String -Path \"src\\\\sim\\\\events.ts\" -Pattern \"choice|act|slot|item\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Write-Output \"=== ShopScene icon usage ===\"; Select-String -Path \"src\\\\ui\\\\screens\\\\ShopScene.ts\" -Pattern \"icon|Text|Sprite\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" } | Select-Object -First 14; Write-Output \"=== BattleScene choice bar ===\"; Select-String -Path \"src\\\\ui\\\\screens\\\\BattleScene.ts\" -Pattern \"choice|options|actionBar|slot\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" } | Select-Object -First 25; Write-Output \"=== CharacterCard held item ===\"; Select-String -Path \"src\\\\ui\\\\components\\\\CharacterCard.ts\" -Pattern \"heldItem|getShopItem|item\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Get-Content \"src\\\\app\\\\layout.ts\" -Encoding utf8; Write-Output \"=== Game layout usage ===\"; Select-String -Path \"src\\\\app\\\\Game.ts\" -Pattern \"layout|viewportDesign|frame\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" } | Select-Object -First 15)",
+      "PowerShell(Select-String -Path \"src\\\\ui\\\\screens\\\\BattleScene.ts\" -Pattern \"e.slot === 'ult'|e.slot === 'skill'|e.slot === 'charge'\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Write-Output \"=== ShopScene imports/head ===\"; Get-Content \"src\\\\ui\\\\screens\\\\ShopScene.ts\" -Encoding utf8 -TotalCount 16; Write-Output \"=== drawBag icon usage ===\"; Select-String -Path \"src\\\\ui\\\\screens\\\\ShopScene.ts\" -Pattern \"item.icon|held.icon|\\\\.icon\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Get-NetTCPConnection -LocalPort 5173 -State Listen | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -Confirm:$false; \"killed $_\" })",
+      "PowerShell(Get-ChildItem src\\\\assets\\\\portraits -Recurse | ForEach-Object { if \\($_.PSIsContainer\\) { \"DIR  $\\($_.FullName.Replace\\(\\(Get-Location\\).Path + '\\\\src\\\\assets\\\\portraits\\\\', ''\\)\\)\" } else { \"     $\\($_.FullName.Replace\\(\\(Get-Location\\).Path + '\\\\src\\\\assets\\\\portraits\\\\', ''\\)\\)\" } })",
+      "Bash(grep -oE \"'[a-z0-9.-]+'|\\\\\"[a-z0-9.-]+\\\\\"$\")",
+      "Bash(xargs -n1 basename)"
+    ]
+  }
+}

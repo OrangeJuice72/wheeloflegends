@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { RunState } from './run';
+import { RunState, populatedFranchises, summonRarityOdds } from './run';
+import { simulateBattle, type CombatantSpec } from './battle';
+import type { BattleResult } from './events';
+import type { ModifierId } from '../data/modifiers';
 import { Balance } from '../data/balance';
 import { getShopItem, itemPowerScore, ITEM_SPIN_PRICES, ITEM_SPIN_WEIGHTS, ITEM_TIER_ORDER, matchesItemAffinity, MYSTERY_ITEM_WEIGHTS, SHOP_ITEMS } from '../data/items';
 import { CHARACTERS, getCharacter } from '../data/characters';
@@ -11,18 +14,35 @@ import { characterPowerScore, CURATED_RARITY, strengthTypes } from '../data/char
 import { BATTLEFIELDS } from '../data/battlefields';
 
 describe('recruit odds', () => {
-  it('10k spins match the published rarity table within tolerance', () => {
+  it('20k spins match the published summon odds within tolerance', () => {
     const run = new RunState(9001);
-    run.spins = 10000;
+    run.spins = 20000;
     const counts: Record<Rarity, number> = { common: 0, rare: 0, epic: 0, legendary: 0, supreme: 0, godlike: 0 };
-    for (let i = 0; i < 10000; i++) counts[run.spin().rarity]++;
-    const totalWeight = Object.values(Balance.rarity.weights).reduce((a, b) => a + b, 0);
+    for (let i = 0; i < 20000; i++) counts[run.spin().rarity]++;
+    const odds = summonRarityOdds();
     for (const rarity of Object.keys(counts) as Rarity[]) {
-      const expected = Balance.rarity.weights[rarity] / totalWeight;
-      const actual = counts[rarity] / 10000;
-      // 3-sigma binomial tolerance
-      const sigma = Math.sqrt((expected * (1 - expected)) / 10000);
-      expect(Math.abs(actual - expected)).toBeLessThan(3.5 * sigma + 0.005);
+      const expected = odds[rarity];
+      const actual = counts[rarity] / 20000;
+      // 3.5-sigma binomial tolerance
+      const sigma = Math.sqrt((expected * (1 - expected)) / 20000);
+      expect(Math.abs(actual - expected), rarity).toBeLessThan(3.5 * sigma + 0.005);
+    }
+  });
+
+  it('every populated universe is equally likely to appear', () => {
+    const run = new RunState(4242);
+    run.spins = 60000;
+    const franchises = populatedFranchises();
+    const counts = new Map(franchises.map((f) => [f, 0]));
+    for (let i = 0; i < 60000; i++) {
+      const f = run.spin().franchise;
+      counts.set(f, (counts.get(f) ?? 0) + 1);
+    }
+    const expected = 1 / franchises.length;
+    const sigma = Math.sqrt((expected * (1 - expected)) / 60000);
+    for (const f of franchises) {
+      const actual = (counts.get(f) ?? 0) / 60000;
+      expect(Math.abs(actual - expected), f).toBeLessThan(4 * sigma + 0.004);
     }
   });
 
@@ -37,6 +57,149 @@ describe('recruit odds', () => {
     run.spin();
     expect(run.gold).toBe(1000 - cost1);
     expect(run.spinCost).toBeGreaterThan(cost1);
+  });
+});
+
+describe('run modifiers', () => {
+  const spawnMaxHp = (result: BattleResult): number => {
+    const spawn = result.events.find((e) => e.kind === 'spawn' && e.side === 'player');
+    return spawn && 'maxHp' in spawn ? spawn.maxHp : 0;
+  };
+
+  it('Mono-Universe locks every summon to one universe', () => {
+    const run = new RunState(555, 'normal', ['mono-universe']);
+    expect(run.monoFranchise).toBeTruthy();
+    run.spins = 500;
+    for (let i = 0; i < 500; i++) expect(run.spin().franchise).toBe(run.monoFranchise);
+    const odds = run.summonOdds();
+    expect(Object.values(odds).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 5);
+  });
+
+  it('Underdog restricts summons to Common and Rare', () => {
+    const run = new RunState(777, 'normal', ['underdog']);
+    run.spins = 800;
+    for (let i = 0; i < 800; i++) expect(['common', 'rare']).toContain(run.spin().rarity);
+    const odds = run.summonOdds();
+    expect(odds.epic + odds.legendary + odds.supreme + odds.godlike).toBe(0);
+    expect(odds.common + odds.rare).toBeCloseTo(1, 5);
+  });
+
+  it('Glass Cannon lowers max HP and raises attack for the player team', () => {
+    const run = new RunState(3, 'normal', ['glass-cannon']);
+    run.addRecruit(getCharacter('superman'));
+    expect(run.playerSpecs()[0]!.extraBoosts).toEqual({ atk: 0.4, hp: -0.35 });
+
+    const foe: CombatantSpec = { defId: 'bowser', level: 1, slot: 0, hpPct: 1, statScale: 1 };
+    const glass: CombatantSpec = { defId: 'superman', level: 1, slot: 0, hpPct: 1, statScale: 1, extraBoosts: { atk: 0.4, hp: -0.35 } };
+    const plain: CombatantSpec = { defId: 'superman', level: 1, slot: 0, hpPct: 1, statScale: 1 };
+    expect(spawnMaxHp(simulateBattle([glass], [foe], 1))).toBeLessThan(spawnMaxHp(simulateBattle([plain], [foe], 1)));
+  });
+
+  it('Sudden Death removes recovery rewards and revives the fallen at 10%', () => {
+    const sudden = new RunState(9, 'normal', ['sudden-death']);
+    for (let i = 0; i < 40; i++) {
+      for (const choice of sudden.generateRewards()) expect(choice.category, choice.id).not.toBe('recovery');
+    }
+    const normal = new RunState(9, 'normal');
+    const normalCategories = new Set<string>();
+    for (let i = 0; i < 40; i++) for (const c of normal.generateRewards()) normalCategories.add(c.category);
+    expect(normalCategories.has('recovery')).toBe(true);
+
+    for (const [mods, expected] of [[['sudden-death'] as ModifierId[], 0.1], [[] as ModifierId[], 0.2]] as const) {
+      const run = new RunState(1, 'normal', mods);
+      run.addRecruit(getCharacter('superman'));
+      const result: BattleResult = {
+        winner: 'enemy', duration: 1, events: [],
+        units: [{ uid: 'p0', defId: 'superman', side: 'player', damageDealt: 0, healingDone: 0, kills: 0, alive: false, hpPct: 0 }],
+      };
+      run.applyBattleResult(result);
+      expect(run.roster[0]!.hpPct).toBeCloseTo(expected, 5);
+    }
+  });
+
+  it('a standard run has no modifiers and the full recruit pool', () => {
+    const run = new RunState(1);
+    expect(run.modifiers.size).toBe(0);
+    expect(run.monoFranchise).toBeNull();
+    expect(run.eligibleRecruitPool().length).toBe(CHARACTERS.length);
+    expect(run.mode).toBe('tower');
+    expect(run.draft).toBe(false);
+  });
+});
+
+describe('draft recruiting', () => {
+  it('offers the requested number of distinct candidates', () => {
+    const run = new RunState(31, 'normal', [], { draft: true });
+    for (let i = 0; i < 50; i++) {
+      const offers = run.rollDraftOptions(3);
+      expect(offers).toHaveLength(3);
+      expect(new Set(offers.map((c) => c.id)).size).toBe(3);
+    }
+  });
+
+  it('honors modifier constraints in the offers', () => {
+    const run = new RunState(32, 'normal', ['underdog'], { draft: true });
+    for (let i = 0; i < 50; i++) {
+      for (const offer of run.rollDraftOptions(3)) expect(['common', 'rare']).toContain(offer.rarity);
+    }
+  });
+
+  it('payment consumes a free spin, then gold', () => {
+    const run = new RunState(33, 'normal', [], { draft: true });
+    run.spins = 1;
+    run.payForRecruit();
+    expect(run.spins).toBe(0);
+    run.gold = 1000;
+    const cost = run.spinCost;
+    run.payForRecruit();
+    expect(run.gold).toBe(1000 - cost);
+  });
+});
+
+describe('universe conquest', () => {
+  it('builds a shuffled ladder of every populated universe', () => {
+    const run = new RunState(41, 'normal', [], { mode: 'conquest' });
+    expect(run.isConquest()).toBe(true);
+    expect([...run.conquestOrder].sort()).toEqual([...populatedFranchises()].sort());
+    expect(run.conquestTarget()).toBe(run.conquestOrder[0]);
+  });
+
+  it('fields an enemy squad drawn entirely from the target universe', () => {
+    const run = new RunState(42, 'normal', [], { mode: 'conquest' });
+    const byId = new Map(CHARACTERS.map((c) => [c.id, c]));
+    for (let node = 1; node <= run.conquestOrder.length; node++) {
+      run.floor = node;
+      const info = run.currentFloor();
+      const universe = run.conquestOrder[node - 1];
+      expect(info.enemies.length).toBeGreaterThanOrEqual(2);
+      for (const e of info.enemies) expect(byId.get(e.defId)!.franchise, `node ${node}`).toBe(universe);
+    }
+  });
+
+  it('keeps early nodes within the tower cost budget (not a wall of the best)', () => {
+    const run = new RunState(44, 'normal', [], { mode: 'conquest' });
+    run.floor = 1; // shallow node: budget only affords a small squad
+    const info = run.currentFloor();
+    const cost = info.enemies.reduce((sum, e) => sum + Balance.rarity.cost[getCharacter(e.defId).rarity], 0);
+    // budget at node 1 is budgetBase; allow the min-two-defenders padding to exceed slightly
+    expect(info.enemies.some((e) => e.boss)).toBe(false); // no boss on a non-final node
+    expect(cost).toBeLessThanOrEqual(Balance.tower.budgetBase + 12);
+  });
+
+  it('marks only the final node as a boss floor, led by the champion, and completes after it', () => {
+    const run = new RunState(43, 'normal', [], { mode: 'conquest' });
+    const last = run.conquestOrder.length;
+    run.floor = last - 1;
+    const penultimate = run.currentFloor();
+    expect(penultimate.isBoss).toBe(false);
+    expect(penultimate.enemies.some((e) => e.boss)).toBe(false);
+    run.floor = last;
+    const finalNode = run.currentFloor();
+    expect(finalNode.isBoss).toBe(true);
+    expect(finalNode.enemies.some((e) => e.boss)).toBe(true); // champion headlines the final stand
+    expect(run.conquestComplete()).toBe(false);
+    run.advanceFloor();
+    expect(run.conquestComplete()).toBe(true);
   });
 });
 
