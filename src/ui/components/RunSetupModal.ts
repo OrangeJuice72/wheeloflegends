@@ -1,9 +1,10 @@
 /** Pre-run setup: choose a mode, a recruit style, and any challenge modifiers. */
 
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import type { Sfx } from '../../audio/Sfx';
 import { MODIFIERS, type ModifierId } from '../../data/modifiers';
-import type { GameMode } from '../../sim/run';
+import { getFranchise } from '../../data/franchises';
+import { populatedFranchises, type GameMode } from '../../sim/run';
 import { Button } from './Button';
 import { H, mix, Palette, Type, W } from '../theme';
 
@@ -15,6 +16,8 @@ export interface RunConfig {
   mode: GameMode;
   draft: boolean;
   modifiers: ModifierId[];
+  /** Chosen Mono-Universe (null = random). Only meaningful if that modifier is on. */
+  monoFranchise?: string | null;
 }
 
 interface Segment<T> {
@@ -26,6 +29,7 @@ export class RunSetupModal extends Container {
   private readonly sheet = new Container();
   private mode: GameMode;
   private draft: boolean;
+  private monoFranchise: string | null;
   private readonly selected: Set<ModifierId>;
 
   constructor(
@@ -37,6 +41,7 @@ export class RunSetupModal extends Container {
     super();
     this.mode = initial.mode;
     this.draft = initial.draft;
+    this.monoFranchise = initial.monoFranchise ?? null;
     this.selected = new Set(initial.modifiers);
     const dim = new Graphics().rect(0, 0, W, H).fill({ color: Palette.black, alpha: 0.8 });
     dim.eventMode = 'static';
@@ -101,11 +106,18 @@ export class RunSetupModal extends Container {
       name.style.fontSize = 15;
       name.style.fill = on ? Palette.gold : Palette.text;
       name.position.set(76, y + 8);
-      const desc = new Text({ text: mod.short, style: Type.small() });
-      desc.style.fontSize = 11;
-      desc.style.fill = Palette.textDim;
-      desc.position.set(76, y + 28);
-      if (desc.width > PANEL_W - 200) desc.scale.set((PANEL_W - 200) / desc.width);
+      this.sheet.addChild(row, icon, name);
+
+      if (mod.id === 'mono-universe' && on) {
+        this.buildUniverseSelector(y);
+      } else {
+        const desc = new Text({ text: mod.short, style: Type.small() });
+        desc.style.fontSize = 11;
+        desc.style.fill = Palette.textDim;
+        desc.position.set(76, y + 28);
+        if (desc.width > PANEL_W - 200) desc.scale.set((PANEL_W - 200) / desc.width);
+        this.sheet.addChild(desc);
+      }
 
       const toggle = new Button(on ? 'ON' : 'OFF', this.sfx, {
         width: 80,
@@ -114,7 +126,7 @@ export class RunSetupModal extends Container {
         onClick: () => this.toggle(mod.id),
       });
       toggle.position.set(PANEL_W - 66, y + (MOD_ROW_H - 10) / 2);
-      this.sheet.addChild(row, icon, name, desc, toggle);
+      this.sheet.addChild(toggle);
     });
 
     const label = this.mode === 'conquest' ? 'BEGIN CONQUEST' : 'BEGIN CLIMB';
@@ -124,7 +136,7 @@ export class RunSetupModal extends Container {
       variant: 'primary',
       onClick: () => {
         this.sfx.click();
-        this.onStart({ mode: this.mode, draft: this.draft, modifiers: [...this.selected] });
+        this.onStart({ mode: this.mode, draft: this.draft, modifiers: [...this.selected], monoFranchise: this.monoFranchise });
       },
     });
     begin.position.set(PANEL_W / 2 - 118, PANEL_H - 38);
@@ -164,6 +176,37 @@ export class RunSetupModal extends Container {
       button.position.set(PANEL_W - 44 - areaW + buttonW / 2 + index * (buttonW + gap), y + 30);
       this.sheet.addChild(button);
     });
+  }
+
+  /** Inline "◀ UNIVERSE ▶" picker shown on the Mono-Universe row when it is on. */
+  private buildUniverseSelector(y: number): void {
+    const cy = y + 34;
+    const arrow = (glyph: string, x: number, dir: number): Text => {
+      const t = new Text({ text: glyph, style: { fontFamily: 'Bahnschrift, "Segoe UI", sans-serif', fontSize: 15, fontWeight: 'bold', fill: Palette.gold } });
+      t.anchor.set(0.5);
+      t.position.set(x, cy);
+      t.eventMode = 'static';
+      t.cursor = 'pointer';
+      t.hitArea = new Rectangle(-14, -14, 28, 28);
+      t.on('pointerdown', (e) => { e?.stopPropagation?.(); this.cycleUniverse(dir); });
+      return t;
+    };
+    const label = new Text({ text: this.monoFranchise ? getFranchise(this.monoFranchise).name : '🎲  RANDOM', style: Type.small() });
+    label.style.fontSize = 12;
+    label.style.fill = Palette.gold;
+    label.anchor.set(0.5, 0.5);
+    label.position.set(172, cy);
+    if (label.width > 150) label.scale.set(150 / label.width);
+    this.sheet.addChild(arrow('◀', 86, -1), label, arrow('▶', 262, 1));
+  }
+
+  private cycleUniverse(dir: number): void {
+    this.sfx.hover();
+    const options: (string | null)[] = [null, ...populatedFranchises()];
+    const current = options.indexOf(this.monoFranchise);
+    const next = ((current < 0 ? 0 : current) + dir + options.length) % options.length;
+    this.monoFranchise = options[next]!;
+    this.render();
   }
 
   private toggle(id: ModifierId): void {

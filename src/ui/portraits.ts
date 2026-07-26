@@ -50,24 +50,42 @@ const backgroundTexById = new Map<string, Texture>();
 const battlefieldTexById = new Map<string, Texture>();
 const itemTexById = new Map<string, Texture>();
 
-async function loadInto(urls: Map<string, string>, store: Map<string, Texture>): Promise<void> {
-  for (const [id, url] of urls) {
-    try {
-      store.set(id, await Assets.load<Texture>(url));
-    } catch {
-      // Missing/corrupt art falls back to the procedural rendering.
-    }
-  }
+// Load every URL in a set concurrently (the browser caps parallelism itself),
+// which is far quicker than awaiting each texture in series. `onOne` ticks per
+// finished asset so the boot loader can show real progress.
+async function loadInto(urls: Map<string, string>, store: Map<string, Texture>, onOne?: () => void): Promise<void> {
+  await Promise.all(
+    [...urls].map(async ([id, url]) => {
+      try {
+        store.set(id, await Assets.load<Texture>(url));
+      } catch {
+        // Missing/corrupt art falls back to the procedural rendering.
+      }
+      onOne?.();
+    }),
+  );
 }
 
-/** Call once at boot; resolves instantly when no art has been dropped in. */
-export async function preloadPortraits(): Promise<void> {
-  await loadInto(portraitUrls, textureById);
-  await loadInto(franchiseUrls, franchiseTexById);
-  await loadInto(rarityUrls, rarityTexById);
-  await loadInto(backgroundUrls, backgroundTexById);
-  await loadInto(battlefieldUrls, battlefieldTexById);
-  await loadInto(itemUrls, itemTexById);
+/**
+ * Call once at boot; resolves instantly when no art has been dropped in.
+ * `onProgress(loaded, total)` fires as each asset finishes, for a boot loader.
+ */
+export async function preloadPortraits(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  const total = portraitUrls.size + franchiseUrls.size + rarityUrls.size + backgroundUrls.size + battlefieldUrls.size + itemUrls.size;
+  let loaded = 0;
+  const tick = (): void => {
+    loaded++;
+    onProgress?.(loaded, total);
+  };
+  onProgress?.(0, total);
+  await Promise.all([
+    loadInto(portraitUrls, textureById, tick),
+    loadInto(franchiseUrls, franchiseTexById, tick),
+    loadInto(rarityUrls, rarityTexById, tick),
+    loadInto(backgroundUrls, backgroundTexById, tick),
+    loadInto(battlefieldUrls, battlefieldTexById, tick),
+    loadInto(itemUrls, itemTexById, tick),
+  ]);
 }
 
 export function portraitTexture(characterId: string): Texture | undefined {

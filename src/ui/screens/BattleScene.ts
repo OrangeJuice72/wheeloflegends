@@ -15,6 +15,7 @@ import { getBattlefield } from '../../data/battlefields';
 import type { BattleAbilitySlot, BattleChoice, CombatantSpec } from '../../sim/battle';
 import type { CharacterDef, StatusKind } from '../../data/types';
 import { simulateBattle } from '../../sim/battle';
+import { applyBattleRecords } from '../../sim/records';
 import type { BattleEvent, BattleResult, Side } from '../../sim/events';
 import { Button } from '../components/Button';
 import { Panel } from '../components/Panel';
@@ -26,13 +27,14 @@ import { RewardScene } from './RewardScene';
 import { buildPortrait } from '../portraits';
 import { SummaryScene } from './SummaryScene';
 
-const CARD_SCALE = 0.82;
-const FRONT_YS = [198, 368, 538];
-const BACK_YS = [283, 453];
-const PLAYER_FRONT_X = 475;
-const PLAYER_BACK_X = 340;
-const ENEMY_FRONT_X = 805;
-const ENEMY_BACK_X = 940;
+const CARD_SCALE = 0.9;
+const CARD_TILT = 0.045;
+const FRONT_YS = [275, 455];
+const BACK_YS = [190, 360, 530];
+const PLAYER_FRONT_X = 310;
+const PLAYER_BACK_X = 128;
+const ENEMY_FRONT_X = 970;
+const ENEMY_BACK_X = 1152;
 
 interface UnitView {
   uid: string;
@@ -54,8 +56,6 @@ export class BattleScene extends Scene {
   private eventIndex = 0;
   private finished = false;
   private activeAttack = new Map<string, { fx: string; color: number }>();
-  private logPanel!: Panel;
-  private logLines: Container[] = [];
   private banner: Container | null = null;
   private speedButtons: Button[] = [];
   private autoButton!: Button;
@@ -169,25 +169,34 @@ export class BattleScene extends Scene {
     this.addChild(this.autoButton);
     this.refreshAutoButton();
 
-    // combat log
-    this.logPanel = new Panel(258, 520, 'Live Combat Feed');
-    this.logPanel.position.set(1012, 84);
-    this.addChild(this.logPanel);
-
-    // player synergy chips
+    // Team synergies sit in the lower center, clear of both formations.
     const synergies = this.result.events.filter((e): e is Extract<BattleEvent, { kind: 'synergy' }> => e.kind === 'synergy' && e.side === 'player');
     if (synergies.length > 0) {
-      const panel = new Panel(258, 40 + synergies.length * 40, 'Synergy');
-      panel.position.set(12, 84);
-      synergies.forEach((syn, i) => {
-        const icon = new Text({ text: syn.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 18 } });
-        icon.position.set(14, 12 + i * 40);
-        const name = new Text({ text: syn.name, style: Type.body() });
-        name.position.set(44, 10 + i * 40);
-        const desc = new Text({ text: syn.desc, style: Type.small() });
+      const visibleSynergies = synergies.slice(0, 6);
+      const rows = Math.ceil(visibleSynergies.length / 2);
+      const panelHeight = 42 + rows * 40;
+      const panel = new Panel(420, panelHeight, 'Team Synergy');
+      panel.position.set(430, 708 - panelHeight);
+      visibleSynergies.forEach((syn, i) => {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const x = 10 + col * 204;
+        const y = 4 + row * 40;
+        const chip = new Graphics()
+          .roundRect(x, y, 196, 34, 8)
+          .fill({ color: Palette.black, alpha: 0.52 })
+          .stroke({ color: Palette.success, width: 1, alpha: 0.42 });
+        const icon = new Text({ text: syn.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 17 } });
+        icon.position.set(x + 9, y + 6);
+        const name = new Text({ text: syn.name.toUpperCase(), style: Type.tiny() });
+        name.style.fill = Palette.text;
+        name.position.set(x + 37, y + 4);
+        if (name.width > 150) name.scale.set(150 / name.width);
+        const desc = new Text({ text: syn.desc, style: Type.tiny() });
         desc.style.fill = Palette.success;
-        desc.position.set(44, 28 + i * 40);
-        panel.content.addChild(icon, name, desc);
+        desc.position.set(x + 37, y + 18);
+        if (desc.width > 150) desc.scale.set(150 / desc.width);
+        panel.content.addChild(chip, icon, name, desc);
       });
       this.addChild(panel);
     }
@@ -198,6 +207,7 @@ export class BattleScene extends Scene {
       const def = getCharacter(e.defId);
       const card = new CharacterCard(def, { mode: 'battle', level: e.level, mirror: e.side === 'enemy' });
       const pos = this.slotPos(e.side, e.slot);
+      card.rotation = e.side === 'player' ? CARD_TILT : -CARD_TILT;
       card.setBattlePose(pos.x, pos.y, CARD_SCALE * (e.boss ? 1.12 : 1));
       card.initHp(e.hp, e.maxHp);
       this.cardLayer.addChild(card);
@@ -219,11 +229,12 @@ export class BattleScene extends Scene {
   }
 
   private slotPos(side: Side, slot: number): { x: number; y: number } {
-    const front = slot < 3;
+    const front = slot < Balance.team.frontSlots;
+    const rowIndex = front ? slot : slot - Balance.team.frontSlots;
     if (side === 'player') {
-      return front ? { x: PLAYER_FRONT_X, y: FRONT_YS[slot]! } : { x: PLAYER_BACK_X, y: BACK_YS[slot - 3]! };
+      return front ? { x: PLAYER_FRONT_X, y: FRONT_YS[rowIndex]! } : { x: PLAYER_BACK_X, y: BACK_YS[rowIndex]! };
     }
-    return front ? { x: ENEMY_FRONT_X, y: FRONT_YS[slot]! } : { x: ENEMY_BACK_X, y: BACK_YS[slot - 3]! };
+    return front ? { x: ENEMY_FRONT_X, y: FRONT_YS[rowIndex]! } : { x: ENEMY_BACK_X, y: BACK_YS[rowIndex]! };
   }
 
 
@@ -361,46 +372,61 @@ export class BattleScene extends Scene {
   }
 
   private log(
-    text: string,
-    color: number = Palette.textDim,
-    kind: 'action' | 'damage' | 'status' | 'system' = 'action',
-  ): void {
-    const row = new Container();
-    const iconMap = { action: '>', damage: '!', status: '+', system: '#' } as const;
-    const label = new Text({ text, style: Type.small() });
-    label.style.fill = color;
-    label.style.wordWrap = true;
-    label.style.wordWrapWidth = 164;
-    label.position.set(48, 7);
-    const time = new Text({ text: `${Math.max(0, this.clock).toFixed(1)}s`, style: Type.tiny() });
-    time.style.fill = Palette.textFaint;
-    time.position.set(8, 9);
-    const icon = new Text({ text: iconMap[kind], style: Type.h3() });
-    icon.style.fill = color;
-    icon.anchor.set(0.5);
-    icon.position.set(39, 16);
-    const height = Math.max(32, label.height + 14);
-    const bg = new Graphics().roundRect(0, 0, 226, height, 7)
-      .fill({ color: kind === 'system' ? mix(color, Palette.black, 0.82) : Palette.black, alpha: kind === 'system' ? 0.62 : 0.35 })
-      .rect(0, 0, 3, height).fill({ color, alpha: 0.85 });
-    row.addChild(bg, time, icon, label);
-    this.logLines.unshift(row);
-    this.logPanel.content.addChild(row);
-    if (this.logLines.length > 11) {
-      const old = this.logLines.pop()!;
-      this.logPanel.content.removeChild(old);
-      old.destroy({ children: true });
-    }
-    let y = 8;
-    for (const line of this.logLines) {
-      line.position.set(14, y);
-      y += line.height + 5;
-    }
-  }
+    _text: string,
+    _color: number = Palette.textDim,
+    _kind: 'action' | 'damage' | 'status' | 'system' = 'action',
+  ): void {}
 
   private specialFont(def: CharacterDef): string {
     if (def.tags.includes('magic') || def.tags.includes('royal')) return Fonts.SERIF;
     return Fonts.SANS;
+  }
+
+  private showUltimateCallout(view: UnitView, text: string, color: number): void {
+    const accent = mix(color, getFranchise(view.def.franchise).color, 0.35);
+    const wrap = new Container();
+    const bg = new Graphics()
+      .poly([-126, -38, 108, -38, 126, -20, 126, 38, -108, 38, -126, 20])
+      .fill({ color: Palette.black, alpha: 0.9 })
+      .stroke({ color: accent, width: 2.5, alpha: 0.95 })
+      .poly([-116, -29, 103, -29, 115, -17])
+      .stroke({ color: mix(accent, Palette.white, 0.4), width: 1.2, alpha: 0.72 });
+    const kind = new Text({ text: 'ULTIMATE', style: Type.tiny() });
+    kind.style.fill = accent;
+    kind.anchor.set(0.5);
+    kind.position.set(0, -23);
+    const ability = new Text({
+      text,
+      style: {
+        fontFamily: this.specialFont(view.def),
+        fontSize: 21,
+        fontWeight: '900',
+        fill: Palette.white,
+        letterSpacing: 1.2,
+        stroke: { color: mix(accent, Palette.black, 0.25), width: 3 },
+        dropShadow: { color: accent, blur: 9, distance: 0, alpha: 0.58, angle: 0 },
+      },
+    });
+    ability.anchor.set(0.5);
+    ability.position.set(0, 8);
+    if (ability.width > 220) ability.scale.set(220 / ability.width);
+    wrap.addChild(bg, kind, ability);
+    const direction = view.side === 'player' ? 1 : -1;
+    wrap.position.set(view.card.x + direction * 165, Math.max(118, Math.min(590, view.card.y - 42)));
+    wrap.alpha = 0;
+    wrap.scale.set(0.72);
+    wrap.eventMode = 'none';
+    this.addChild(wrap);
+    Tweens.to(wrap, { alpha: 1 }, { duration: 0.12 });
+    Tweens.to(wrap.scale, { x: 1, y: 1 }, { duration: 0.24, ease: Easing.backOut });
+    Tweens.to(wrap, { alpha: 0 }, {
+      duration: 0.28,
+      delay: 1.05,
+      onComplete: () => {
+        this.removeChild(wrap);
+        wrap.destroy({ children: true });
+      },
+    });
   }
 
   private showBanner(text: string, color: number, view?: UnitView, subtitle = 'SPECIAL'): void {
@@ -526,7 +552,7 @@ export class BattleScene extends Scene {
         this.activeAttack.set(e.uid, { fx: e.fx, color: e.color });
         this.game.sfx.whoosh(e.slot === 'ult' ? 1.35 : e.slot === 'skill' ? 1 : 0.72);
         if (e.slot === 'ult') {
-          this.showBanner(e.ability.toUpperCase(), e.color, view, 'ULTIMATE');
+          this.showUltimateCallout(view, e.ability.toUpperCase(), e.color);
           this.fx.flash(e.color, 0.14);
           this.fx.focusPulse(view.card.x, view.card.y, e.color);
           this.game.sfx.ultBanner();
@@ -704,10 +730,14 @@ export class BattleScene extends Scene {
     Tweens.delay(2.2, () => {
       const run = this.run;
       const won = run.applyBattleResult(this.result);
+      // Personal records update after every battle, win or lose.
+      const playerUnits = this.result.units.filter((u) => u.side === 'player');
+      applyBattleRecords(this.game.meta.records, playerUnits, (id) => getCharacter(id).name);
+      this.game.meta.bestFloor = Math.max(this.game.meta.bestFloor, run.floor);
       if (won) {
+        this.game.saveMeta();
         this.game.goto(new RewardScene(this.game));
       } else {
-        this.game.meta.bestFloor = Math.max(this.game.meta.bestFloor, run.floor);
         this.game.meta.totalKills += run.kills;
         this.game.saveMeta();
         this.game.goto(new SummaryScene(this.game));

@@ -75,6 +75,23 @@ describe('run modifiers', () => {
     expect(Object.values(odds).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 5);
   });
 
+  it('Mono-Universe honors a chosen universe, and falls back to random otherwise', () => {
+    const chosen = new RunState(1, 'normal', ['mono-universe'], { monoFranchise: 'pokemon' });
+    expect(chosen.monoFranchise).toBe('pokemon');
+    chosen.spins = 100;
+    for (let i = 0; i < 100; i++) expect(chosen.spin().franchise).toBe('pokemon');
+
+    // An unknown id or null → a valid random universe (never the bad id).
+    const bogus = new RunState(1, 'normal', ['mono-universe'], { monoFranchise: 'not-a-universe' });
+    expect(populatedFranchises()).toContain(bogus.monoFranchise);
+    const random = new RunState(1, 'normal', ['mono-universe'], { monoFranchise: null });
+    expect(populatedFranchises()).toContain(random.monoFranchise);
+
+    // The choice is ignored unless the modifier is active.
+    const off = new RunState(1, 'normal', [], { monoFranchise: 'pokemon' });
+    expect(off.monoFranchise).toBeNull();
+  });
+
   it('Underdog restricts summons to Common and Rare', () => {
     const run = new RunState(777, 'normal', ['underdog']);
     run.spins = 800;
@@ -110,7 +127,7 @@ describe('run modifiers', () => {
       run.addRecruit(getCharacter('superman'));
       const result: BattleResult = {
         winner: 'enemy', duration: 1, events: [],
-        units: [{ uid: 'p0', defId: 'superman', side: 'player', damageDealt: 0, healingDone: 0, kills: 0, alive: false, hpPct: 0 }],
+        units: [{ uid: 'p0', defId: 'superman', side: 'player', damageDealt: 0, healingDone: 0, kills: 0, dodges: 0, alive: false, hpPct: 0 }],
       };
       run.applyBattleResult(result);
       expect(run.roster[0]!.hpPct).toBeCloseTo(expected, 5);
@@ -223,7 +240,7 @@ describe('roster & team', () => {
     run.addRecruit(godlike[1]!);
     const benched = CHARACTERS.find((character) => !godlike.includes(character))!;
     run.addRecruit(benched);
-    expect(run.teamCost()).toBe(Balance.team.costCap);
+    expect(run.teamCost()).toBe(Balance.rarity.cost.godlike * 2);
     expect(run.teamSize()).toBe(2);
     expect(run.assign(2, 4)).toBe(false);
   });
@@ -471,7 +488,8 @@ describe('run store', () => {
     const easy = new RunState(404, 'easy');
     const normal = new RunState(404, 'normal');
     const hard = new RunState(404, 'hard');
-    easy.floor = normal.floor = hard.floor = 4;
+    // Floor 5+ so the base enemy level is ≥2 and the ±1 difficulty bonus is visible.
+    easy.floor = normal.floor = hard.floor = 5;
     expect(easy.currentFloor().enemies[0]!.level).toBeLessThan(normal.currentFloor().enemies[0]!.level);
     expect(hard.currentFloor().enemies[0]!.level).toBeGreaterThan(normal.currentFloor().enemies[0]!.level);
     const win = { winner: 'player' as const, duration: 10, events: [], units: [] };
@@ -512,16 +530,16 @@ describe('run store', () => {
   it('uses purchased capacity when assigning higher-cost teams', () => {
     const run = new RunState(49);
     const godlike = CHARACTERS.filter((character) => character.rarity === 'godlike');
-    const common = CHARACTERS.find((character) => character.rarity === 'common')!;
-    run.addRecruit(godlike[0]!);
-    run.addRecruit(godlike[1]!);
-    run.addRecruit(common);
-    expect(run.teamCost()).toBe(Balance.team.costCap);
+    const rare = CHARACTERS.find((character) => character.rarity === 'rare')!;
+    run.addRecruit(godlike[0]!); // cost 10 → auto-placed
+    run.addRecruit(godlike[1]!); // cost 10 → auto-placed (20 ≤ cap)
+    run.addRecruit(rare); // benched: 20 + 3 would exceed the base cap
+    expect(run.teamCost()).toBe(Balance.rarity.cost.godlike * 2);
     expect(run.assign(2, 2)).toBe(false);
     run.gold = 1000;
-    expect(run.buyTeamCostUpgrade()).toBe('bought');
+    expect(run.buyTeamCostUpgrade()).toBe('bought'); // cap += costUpgradeSize
     expect(run.assign(2, 2)).toBe(true);
-    expect(run.teamCost()).toBe(Balance.team.costCap + Balance.rarity.cost.common);
+    expect(run.teamCost()).toBe(Balance.rarity.cost.godlike * 2 + Balance.rarity.cost.rare);
   });
 
   it('equips spun gear in Formation and can return it to the Bag', () => {

@@ -44,7 +44,7 @@ export class Game {
     return this.viewportDesignHeight;
   }
 
-  async init(host: HTMLElement): Promise<void> {
+  async init(host: HTMLElement, onProgress?: (loaded: number, total: number) => void): Promise<void> {
     await this.app.init({
       background: Palette.bg,
       resizeTo: host,
@@ -54,7 +54,7 @@ export class Game {
     });
     host.appendChild(this.app.canvas);
     this.sfx.setMuted(this.meta.audioMuted);
-    await preloadPortraits();
+    await preloadPortraits(onProgress);
 
     this.app.stage.addChild(this.bg);
     this.frame.addChild(this.shaker);

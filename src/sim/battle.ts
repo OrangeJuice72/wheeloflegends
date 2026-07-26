@@ -16,7 +16,7 @@ import type { BattleEvent, BattleResult, Side, UnitResultStats } from './events'
 export interface CombatantSpec {
   defId: string;
   level: number;
-  slot: number; // 0..2 front row, 3..4 back row
+  slot: number; // 0..1 front row, 2..4 back row
   hpPct: number; // carry-over health entering the battle (0..1]
   statScale: number; // floor scaling (enemy) or relic scaling (player)
   itemBoosts?: ItemBoosts;
@@ -87,6 +87,7 @@ interface Unit {
   // result stats
   damageDealt: number;
   healingDone: number;
+  dodges: number;
   kills: number;
 }
 
@@ -99,8 +100,11 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
   const heldItem = spec.itemId ? getShopItem(spec.itemId) : undefined;
   const item = heldItem ? effectiveItemBoosts(heldItem, def) : spec.itemBoosts ?? {};
   const extra = spec.extraBoosts ?? {};
+  const isFront = spec.slot < Balance.team.frontSlots;
   const hpMult = levelMult * spec.statScale * bossMult * Math.max(0.1, 1 + synergyBonus.hp + (item.hp ?? 0) + (extra.hp ?? 0));
-  const atkMult = levelMult * spec.statScale * bossMult * (1 + synergyBonus.atk + (item.atk ?? 0) + (extra.atk ?? 0));
+  const atkMult = levelMult * spec.statScale * bossMult
+    * (1 + synergyBonus.atk + (item.atk ?? 0) + (extra.atk ?? 0))
+    * (isFront ? 1 + B.frontAttackBonus : 1);
 
   let regen = synergyBonus.regenPerSec;
   let dodge = 0;
@@ -125,7 +129,9 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     maxHp,
     hp: Math.max(1, Math.round(maxHp * spec.hpPct)),
     baseAtk: Math.round(def.stats.atk * atkMult),
-    baseDef: def.stats.def * (1 + synergyBonus.def + (item.def ?? 0) + (extra.def ?? 0)),
+    baseDef: def.stats.def
+      * (1 + synergyBonus.def + (item.def ?? 0) + (extra.def ?? 0))
+      * (isFront ? 1 : 1 + B.backDefenseBonus),
     baseSpd: def.stats.spd * (1 + synergyBonus.spd + (item.spd ?? 0) + (extra.spd ?? 0)),
     baseCrit: def.stats.crit + synergyBonus.crit + (item.crit ?? 0) + (extra.crit ?? 0),
     critDmg: def.stats.critDmg,
@@ -150,6 +156,7 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     alive: true,
     damageDealt: 0,
     healingDone: 0,
+    dodges: 0,
     kills: 0,
   };
 }
@@ -265,6 +272,7 @@ export function simulateBattle(
   function applyDamage(source: Unit, target: Unit, raw: number, crit: boolean, weakness = false): void {
     if (!target.alive) return;
     if (target.dodgeChance > 0 && rng.chance(target.dodgeChance)) {
+      target.dodges++;
       emit({ t, kind: 'dodge', target: target.uid });
       return;
     }
@@ -582,6 +590,7 @@ export function simulateBattle(
     damageDealt: Math.round(u.damageDealt),
     healingDone: Math.round(u.healingDone),
     kills: u.kills,
+    dodges: u.dodges,
     alive: u.alive,
     hpPct: u.alive ? u.hp / u.maxHp : 0,
   }));

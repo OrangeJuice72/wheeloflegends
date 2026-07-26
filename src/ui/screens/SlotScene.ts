@@ -700,7 +700,7 @@ export class SlotScene extends Scene {
 
     const steps = [
       '1.   SUMMON to recruit legends',
-      '2.   Set your FORMATION — 3 front, 2 back',
+      '2.   Set your FORMATION — 2 front, 3 back',
       '3.   Battle upward; every floor pays coins',
     ];
     const stepNodes = steps.map((text, i) => {

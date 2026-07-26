@@ -28,8 +28,8 @@ const SLOT_W = CARD_W * SLOT_SCALE;
 const SLOT_H = CARD_H * SLOT_SCALE;
 const FRONT_Y = 240;
 const BACK_Y = 448;
-const SLOT_XS_FRONT = [420, 570, 720];
-const SLOT_XS_BACK = [495, 645];
+const SLOT_XS_FRONT = [495, 645];
+const SLOT_XS_BACK = [420, 570, 720];
 
 export class TeamScene extends Scene {
   private slotLayer = new Container();
@@ -97,10 +97,10 @@ export class TeamScene extends Scene {
     }
 
     // row labels
-    const frontLabel = new Text({ text: 'FRONT LINE — takes the hits', style: Type.tiny() });
+    const frontLabel = new Text({ text: `FRONT LINE — +${Math.round(Balance.battle.frontAttackBonus * 100)}% ATK`, style: Type.tiny() });
     frontLabel.anchor.set(0.5);
     frontLabel.position.set(570, FRONT_Y - SLOT_H / 2 - 16);
-    const backLabel = new Text({ text: 'BACK LINE — protected', style: Type.tiny() });
+    const backLabel = new Text({ text: `BACK LINE — +${Math.round(Balance.battle.backDefenseBonus * 100)}% DEF`, style: Type.tiny() });
     backLabel.anchor.set(0.5);
     backLabel.position.set(570, BACK_Y - SLOT_H / 2 - 16);
     this.addChild(frontLabel, backLabel, this.slotLayer);

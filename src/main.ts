@@ -1,6 +1,7 @@
 import { Game } from './app/Game';
 import { resolveVisibleViewport } from './app/layout';
 import { MenuScene } from './ui/screens/MenuScene';
+import { installCaptureButton } from './gg/overrides';
 
 function installMobileViewport(shell: HTMLElement): void {
   let scheduled = false;
@@ -39,13 +40,32 @@ async function boot(): Promise<void> {
   const host = document.getElementById('game');
   if (!shell || !host) throw new Error('#app shell or #game host element missing');
   installMobileViewport(shell);
+
+  const loader = document.getElementById('loader');
+  const loaderBar = document.getElementById('loader-bar');
+  const loaderStatus = document.getElementById('loader-status');
+
   const game = new Game();
-  await game.init(host);
+  await game.init(host, (loaded, total) => {
+    const pct = total > 0 ? Math.round((loaded / total) * 100) : 100;
+    if (loaderBar) loaderBar.style.width = `${pct}%`;
+    if (loaderStatus) loaderStatus.textContent = `LOADING ${pct}%`;
+  });
   game.goto(new MenuScene(game));
+
+  // Reveal the game and retire the pre-loader.
+  if (loader) {
+    loader.classList.add('loaded');
+    setTimeout(() => loader.remove(), 550);
+  }
+
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>;
     w.__game = game;
     w.__data = { CHARACTERS: (await import('./data/characters')).CHARACTERS };
+    // GameGenie: floating "Capture layout" button dumps the active scene's live
+    // element tree to public/gg/<scene>.gg.json so you can edit it in GameGenie.
+    installCaptureButton((() => (game as unknown as { scene?: unknown }).scene ?? null) as never);
   }
 }
 

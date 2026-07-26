@@ -48,6 +48,7 @@ export interface UnitResultStats {
   damageDealt: number;
   healingDone: number;
   kills: number;
+  dodges: number;
   alive: boolean;
   hpPct: number;
 }

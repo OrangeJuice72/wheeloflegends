@@ -36,10 +36,10 @@ export function floorScale(floor: number): number {
   return 1 + Balance.tower.scalePerFloor * (floor - 1);
 }
 
-/** Assign slots so beefy units land in the front row (0..2), squishy in back. */
+/** Assign slots so the two bulkiest units hold the front and three allies form the back line. */
 function assignSlots(defs: CharacterDef[]): { def: CharacterDef; slot: number }[] {
   const byBulk = [...defs].sort((a, b) => b.stats.hp * (100 + b.stats.def) - a.stats.hp * (100 + a.stats.def));
-  const order = [0, 1, 2, 3, 4]; // bulkiest three take the front
+  const order = [0, 1, 2, 3, 4]; // bulkiest two take the front
   return byBulk.map((def, i) => ({ def, slot: order[i] ?? i }));
 }
 
@@ -72,7 +72,7 @@ export function generateFloor(floor: number, rng: Rng): FloorInfo {
     picked.push(rng.pick(commons));
   }
 
-  const level = 1 + Math.floor((floor - 1) / 3);
+  const level = 1 + Math.floor((floor - 1) / 4);
   const enemies: CombatantSpec[] = assignSlots(picked).map(({ def, slot }) => ({
     defId: def.id,
     level: Math.min(level, Balance.level.max),
@@ -126,7 +126,7 @@ export function generateConquestNode(nodeIndex: number, universe: string, totalN
     picked.push(cheapest);
   }
 
-  const level = 1 + Math.floor((nodeIndex - 1) / 3);
+  const level = 1 + Math.floor((nodeIndex - 1) / 4);
   const enemies: CombatantSpec[] = assignSlots(picked).map(({ def, slot }) => ({
     defId: def.id,
     level: Math.min(level, Balance.level.max),

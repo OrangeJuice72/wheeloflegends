@@ -22,6 +22,8 @@ export interface RunOptions {
   mode?: GameMode;
   /** Draft recruiting: choose 1 of several offers instead of a random pull. */
   draft?: boolean;
+  /** Chosen universe for Mono-Universe; null/undefined or unknown id = random. */
+  monoFranchise?: string | null;
 }
 
 export interface RosterEntry {
@@ -80,7 +82,7 @@ export class RunState {
   spins: number = Balance.economy.startingSpins;
   spinsBought = 0;
   roster: RosterEntry[] = [];
-  /** team[slot] = roster index or null; slots 0..2 front, 3..4 back. */
+  /** team[slot] = roster index or null; slots 0..1 front, 2..4 back. */
   team: (number | null)[] = [null, null, null, null, null];
   relicAtk = 0;
   relicHp = 0;
@@ -117,8 +119,12 @@ export class RunState {
     this.battleRng = root.fork();
     // Meta draws on their own stream so they never disturb recruit/battle sequences.
     const meta = root.fork();
-    this.monoFranchise = this.modifiers.has('mono-universe') ? meta.pick(populatedFranchises()) : null;
-    this.conquestOrder = this.mode === 'conquest' ? meta.shuffle(populatedFranchises()) : [];
+    const universes = populatedFranchises();
+    const chosen = options.monoFranchise;
+    this.monoFranchise = this.modifiers.has('mono-universe')
+      ? (chosen && universes.includes(chosen) ? chosen : meta.pick(universes))
+      : null;
+    this.conquestOrder = this.mode === 'conquest' ? meta.shuffle(universes) : [];
   }
 
   // ── conquest ───────────────────────────────────────────────────────────

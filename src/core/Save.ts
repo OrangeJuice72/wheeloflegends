@@ -3,8 +3,22 @@
 export type Difficulty = 'easy' | 'normal' | 'hard';
 export type BattleSpeed = 1 | 2 | 3;
 
+/** One all-time personal best: a value plus who/what set it. */
+export interface StatRecord {
+  value: number;
+  detail: string; // legend name, team roster, etc.
+}
+
+/** All-time hall-of-records, persisted across every run. */
+export interface RunRecords {
+  legendDamage: StatRecord; // most damage by a single legend in one battle
+  teamDamage: StatRecord; // most total damage by the team in one battle
+  legendHeals: StatRecord; // most healing by a single legend in one battle
+  legendDodges: StatRecord; // most dodges by a single legend in one battle
+}
+
 export interface MetaSave {
-  version: 1;
+  version: 2;
   bestFloor: number;
   totalRuns: number;
   totalKills: number;
@@ -13,12 +27,22 @@ export interface MetaSave {
   difficulty: Difficulty;
   defaultAutoBattle: boolean;
   defaultBattleSpeed: BattleSpeed;
+  records: RunRecords;
 }
 
 const KEY = 'wheel-of-legends.meta';
 
+export function emptyRecords(): RunRecords {
+  return {
+    legendDamage: { value: 0, detail: '' },
+    teamDamage: { value: 0, detail: '' },
+    legendHeals: { value: 0, detail: '' },
+    legendDodges: { value: 0, detail: '' },
+  };
+}
+
 const DEFAULTS: MetaSave = {
-  version: 1,
+  version: 2,
   bestFloor: 0,
   totalRuns: 0,
   totalKills: 0,
@@ -27,16 +51,23 @@ const DEFAULTS: MetaSave = {
   difficulty: 'normal',
   defaultAutoBattle: false,
   defaultBattleSpeed: 1,
+  records: emptyRecords(),
 };
 
 export function loadMeta(): MetaSave {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return { ...DEFAULTS };
+    if (!raw) return { ...DEFAULTS, records: emptyRecords() };
     const parsed = JSON.parse(raw) as Partial<MetaSave>;
-    return { ...DEFAULTS, ...parsed, version: 1 };
+    // Merge forward so saves from before records existed gain the new fields.
+    return {
+      ...DEFAULTS,
+      ...parsed,
+      version: 2,
+      records: { ...emptyRecords(), ...(parsed.records ?? {}) },
+    };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, records: emptyRecords() };
   }
 }
 

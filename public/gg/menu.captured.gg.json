@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "menu",
+    "width": 1280,
+    "height": 720,
+    "background": "#12131f",
+    "backgroundAsset": null
+  },
+  "assets": {},
+  "root": {
+    "id": "root",
+    "type": "container",
+    "name": "Root",
+    "children": [
+      {
+        "id": "cap_0m03u",
+        "name": "group_1",
+        "x": 0,
+        "y": 0,
+        "rotation": 0,
+        "alpha": 1,
+        "visible": true,
+        "type": "container",
+        "scaleX": 1,
+        "scaleY": 1,
+        "children": [
+          {
+            "id": "cap_12tn0",
+            "name": "Graphics",
+            "x": -252.49,
+            "y": 0,
+            "rotation": 0,
+            "alpha": 1,
+            "visible": true,
+            "type": "hitbox",
+            "shape": "rect",
+            "width": 1784.97,
+            "height": 720
+          },
+          {
+            "id": "cap_2ldu8",
+            "name": "Sprite",
+            "x": 640,
+            "y": 213.94,
+            "rotation": 0,
+            "alpha": 1,
+            "visible": true,
+            "type": "sprite",
+            "asset": "start-menu",
+            "scaleX": 1,
+            "scaleY": 1,
+            "width": 1802.82,
+            "height": 1012.11,
+            "anchorX": 0.5,
+            "anchorY": 0.5
+          }
+        ]
+      },
+      {
+        "id": "cap_3fz9n",
+        "name": "Graphics",
+        "x": 548,
+        "y": 539,
+        "rotation": 0,
+        "alpha": 0.02,
+        "visible": true,
+        "type": "hitbox",
+        "shape": "rect",
+        "width": 190,
+        "height": 42
+      },
+      {
+        "id": "cap_4xljk",
+        "name": "Graphics",
+        "x": 548,
+        "y": 584.25,
+        "rotation": 0,
+        "alpha": 0.02,
+        "visible": true,
+        "type": "hitbox",
+        "shape": "rect",
+        "width": 190,
+        "height": 42
+      },
+      {
+        "id": "cap_5vsdk",
+        "name": "Graphics",
+        "x": 548,
+        "y": 629.19,
+        "rotation": 0,
+        "alpha": 0.02,
+        "visible": true,
+        "type": "hitbox",
+        "shape": "rect",
+        "width": 190,
+        "height": 42
+      }
+    ]
+  }
+}

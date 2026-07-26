@@ -9,13 +9,13 @@ import type { Game } from '../../app/Game';
 import { Tweens, Easing } from '../../core/Tween';
 import { getFranchise } from '../../data/franchises';
 import { Button } from '../components/Button';
+import { SettingsModal } from '../components/SettingsModal';
 import { FxLayer } from '../fx/effects';
 import { FeatheredBackground } from '../fx/FeatheredBackground';
 import { backgroundTexture, franchiseTexture } from '../portraits';
 import { H, mix, Palette, Type, W } from '../theme';
 import { SlotScene } from './SlotScene';
 import { SummaryScene } from './SummaryScene';
-import { MenuScene } from './MenuScene';
 
 const COLS = 6;
 const CELL_W = 176;
@@ -90,14 +90,14 @@ export class ConquestMapScene extends Scene {
       onClick: () => this.game.goto(new SlotScene(this.game)),
     });
     enter.position.set(W / 2 - 130, H - 46);
-    const menu = new Button('MAIN MENU', this.game.sfx, {
+    const settings = new Button('⚙  SETTINGS', this.game.sfx, {
       width: 180,
       height: 52,
       variant: 'secondary',
-      onClick: () => this.game.goto(new MenuScene(this.game)),
+      onClick: () => this.openSettings(),
     });
-    menu.position.set(W / 2 + 170, H - 46);
-    this.addChild(enter, menu);
+    settings.position.set(W / 2 + 170, H - 46);
+    this.addChild(enter, settings);
 
     this.addChild(this.fx);
     if (target) this.fx.burst(W / 2, 120, { color: getFranchise(target).color, count: 20, speed: 260, size: 0.4 });
@@ -156,6 +156,14 @@ export class ConquestMapScene extends Scene {
       Tweens.to(panel, { alpha: 0.95 }, { duration: 0.8, delay: 0.8, ease: Easing.sineInOut });
     }
     return wrap;
+  }
+
+  private openSettings(): void {
+    const modal = new SettingsModal(this.game, () => {
+      this.removeChild(modal);
+      modal.destroy({ children: true });
+    });
+    this.addChild(modal);
   }
 
   override onResize(viewportW: number, viewportH: number): void {

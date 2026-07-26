@@ -89,6 +89,32 @@ describe('battle structure', () => {
   });
 });
 
+describe('formation rows', () => {
+  const firstPlayerHit = (result: ReturnType<typeof simulateBattle>): number => {
+    const hit = result.events.find((event) => event.kind === 'damage' && event.source === 'p0' && event.target === 'e0');
+    if (!hit || hit.kind !== 'damage') throw new Error('Expected a player damage event');
+    return hit.amount;
+  };
+
+  it('uses two front slots and three back slots', () => {
+    expect(Balance.team.frontSlots).toBe(2);
+    expect([0, 1].every((slot) => slot < Balance.team.frontSlots)).toBe(true);
+    expect([2, 3, 4].every((slot) => slot >= Balance.team.frontSlots)).toBe(true);
+  });
+
+  it('gives the front line an attack bonus', () => {
+    const front = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 301);
+    const back = simulateBattle([spec('pikachu', 2)], [spec('bowser', 0)], 301);
+    expect(firstPlayerHit(front)).toBeGreaterThan(firstPlayerHit(back));
+  });
+
+  it('gives the back line a defense bonus', () => {
+    const frontTarget = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 302);
+    const backTarget = simulateBattle([spec('pikachu', 0)], [spec('bowser', 2)], 302);
+    expect(firstPlayerHit(backTarget)).toBeLessThan(firstPlayerHit(frontTarget));
+  });
+});
+
 describe('manual battle decisions', () => {
   it('stops at a player turn and reports affordable moves', () => {
     const result = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 91, { manual: true });

@@ -2,10 +2,12 @@ import { Container, Graphics, Text } from 'pixi.js';
 import type { Game } from '../../app/Game';
 import type { BattleSpeed, Difficulty } from '../../core/Save';
 import { Button } from './Button';
+import { RecordsModal } from './RecordsModal';
 import { H, Palette, Type, W } from '../theme';
+import { MenuScene } from '../screens/MenuScene';
 
 const PANEL_W = 600;
-const PANEL_H = 570;
+const PANEL_H = 652;
 
 interface Choice<T> {
   label: string;
@@ -14,6 +16,7 @@ interface Choice<T> {
 
 export class SettingsModal extends Container {
   private readonly sheet = new Container();
+  private confirmingQuit = false;
 
   constructor(private readonly game: Game, private readonly onClose: () => void) {
     super();
@@ -94,13 +97,71 @@ export class SettingsModal extends Container {
       },
     );
 
-    const close = new Button('DONE', this.game.sfx, {
-      width: 220,
-      height: 52,
-      onClick: () => this.close(),
+    const records = new Button('🏆  RECORDS', this.game.sfx, {
+      width: 250,
+      height: 46,
+      variant: 'secondary',
+      onClick: () => this.openRecords(),
     });
-    close.position.set(PANEL_W / 2, 526);
-    this.sheet.addChild(close);
+    records.position.set(PANEL_W / 2, 520);
+    this.sheet.addChild(records);
+
+    // Quitting to the main menu lives here — behind the gear and a confirm —
+    // so it can't be tapped by accident between battles and lose the run.
+    if (this.game.run) {
+      if (this.confirmingQuit) {
+        const warn = new Text({ text: 'Leaving now abandons this run — progress is lost.', style: Type.small() });
+        warn.style.fill = Palette.danger;
+        warn.anchor.set(0.5);
+        warn.position.set(PANEL_W / 2, 556);
+        this.sheet.addChild(warn);
+      }
+      const quit = new Button(this.confirmingQuit ? 'CONFIRM — QUIT RUN' : '⌂  MAIN MENU', this.game.sfx, {
+        width: 264,
+        height: 52,
+        variant: 'secondary',
+        onClick: () => {
+          if (this.confirmingQuit) {
+            this.quitToMenu();
+          } else {
+            this.confirmingQuit = true;
+            this.render();
+          }
+        },
+      });
+      quit.position.set(PANEL_W / 2 - 148, 594);
+      const resume = new Button('RESUME', this.game.sfx, {
+        width: 220,
+        height: 52,
+        onClick: () => this.close(),
+      });
+      resume.position.set(PANEL_W / 2 + 148, 594);
+      this.sheet.addChild(quit, resume);
+    } else {
+      const close = new Button('DONE', this.game.sfx, {
+        width: 220,
+        height: 52,
+        onClick: () => this.close(),
+      });
+      close.position.set(PANEL_W / 2, 594);
+      this.sheet.addChild(close);
+    }
+  }
+
+  private openRecords(): void {
+    this.game.sfx.click();
+    const modal = new RecordsModal(this.game, () => {
+      this.removeChild(modal);
+      modal.destroy({ children: true });
+    });
+    this.addChild(modal);
+  }
+
+  private quitToMenu(): void {
+    this.game.sfx.click();
+    this.game.run = null;
+    this.onClose();
+    this.game.goto(new MenuScene(this.game));
   }
 
   private addChoiceRow<T>(
@@ -132,6 +193,7 @@ export class SettingsModal extends Container {
         onClick: () => {
           onChoose(choice.value);
           this.game.saveMeta();
+          this.confirmingQuit = false;
           this.render();
         },
       });

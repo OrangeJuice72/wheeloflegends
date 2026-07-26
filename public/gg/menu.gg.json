@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "Start Menu",
+    "width": 1280,
+    "height": 720,
+    "background": "#12131f",
+    "backgroundAsset": null
+  },
+  "assets": {
+    "start-menu": "src/assets/backgrounds/start-menu.png",
+    "world-zero-logo": "src/assets/backgrounds/world-zero-logo.png",
+    "start-menu-buttons": "src/assets/backgrounds/start-menu-buttons.png"
+  },
+  "root": {
+    "id": "root",
+    "type": "container",
+    "name": "Root",
+    "children": [
+      {
+        "id": "gg_background",
+        "type": "sprite",
+        "name": "Background",
+        "x": 640,
+        "y": 360,
+        "locked": true,
+        "asset": "start-menu",
+        "width": 1280,
+        "height": 720,
+        "anchorX": 0.5,
+        "anchorY": 0.5
+      },
+      {
+        "id": "gg_menu_newRun",
+        "type": "hitbox",
+        "name": "menu.newRun",
+        "x": 515,
+        "y": 483,
+        "shape": "rect",
+        "width": 250,
+        "height": 62,
+        "tag": "button"
+      },
+      {
+        "id": "gg_menu_records",
+        "type": "hitbox",
+        "name": "menu.records",
+        "x": 515,
+        "y": 553,
+        "shape": "rect",
+        "width": 250,
+        "height": 62,
+        "tag": "button"
+      },
+      {
+        "id": "gg_menu_settings",
+        "type": "hitbox",
+        "name": "menu.settings",
+        "x": 515,
+        "y": 623,
+        "shape": "rect",
+        "width": 250,
+        "height": 62,
+        "tag": "button"
+      }
+    ]
+  }
+}

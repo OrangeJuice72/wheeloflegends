@@ -15,6 +15,9 @@ export const CURATED_RARITY: Readonly<Record<string, Rarity>> = {
   // Anime
   goku: 'godlike', luffy: 'supreme', nami: 'rare', naruto: 'supreme', saitama: 'godlike', 'yuji-itadori': 'epic',
   zoro: 'legendary', nobara: 'rare',
+  shanks: 'godlike', vegeta: 'godlike', 'sasuke-uchiha': 'supreme', 'itachi-uchiha': 'legendary', ace: 'legendary',
+  law: 'legendary', sanji: 'legendary', 'toji-fushiguro': 'legendary', 'maki-zenin': 'epic', chopper: 'rare',
+  krillin: 'common', usopp: 'common',
   // Pokémon
   mewtwo: 'supreme', charizard: 'epic', venusaur: 'rare', blastoise: 'rare', gengar: 'rare', pikachu: 'common',
   arceus: 'godlike', 'mega-rayquaza': 'godlike', lugia: 'supreme', 'ho-oh': 'supreme', garchomp: 'legendary',
@@ -34,6 +37,7 @@ export const CURATED_RARITY: Readonly<Record<string, Rarity>> = {
   elsa: 'legendary', ariel: 'epic', genie: 'supreme', hercules: 'legendary', hook: 'rare', mulan: 'epic',
   olaf: 'common', simba: 'common', 'tinker-bell': 'rare', stitch: 'legendary', lilo: 'common',
   'scrooge-mcduck': 'rare', 'buzz-lightyear': 'epic', rapunzel: 'epic', 'chip-&-dale': 'rare', 'darkwing-duck': 'epic',
+  maleficent: 'supreme', ursula: 'legendary', hades: 'legendary', 'sorcerer-mickey': 'legendary', 'mr-incredible': 'epic', merida: 'rare',
   // Mario
   bowser: 'legendary', mario: 'supreme', luigi: 'epic', peach: 'epic', daisy: 'rare', rosalina: 'legendary',
   toad: 'common', yoshi: 'common', 'king-boo': 'rare',

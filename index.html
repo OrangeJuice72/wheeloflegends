@@ -23,6 +23,17 @@
       @media (orientation: landscape) and (max-height: 500px) {
         #rotate-device { padding: 18px; }
       }
+
+      /* Pre-loader — visible instantly, before the game bundle even parses. */
+      #loader { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; padding: 32px; box-sizing: border-box; text-align: center; background: radial-gradient(circle at 50% 38%, #142042, #07080f 72%); transition: opacity 0.5s ease; }
+      #loader.loaded { opacity: 0; pointer-events: none; }
+      #loader .brand { color: #f5c542; font: bold 46px Cambria, "Times New Roman", serif; letter-spacing: 3px; text-shadow: 0 0 22px rgba(245, 197, 66, 0.35); }
+      #loader .brand small { display: block; margin-top: 8px; color: #8a92a6; font: 600 13px Bahnschrift, "Segoe UI", sans-serif; letter-spacing: 5px; }
+      #loader .track { width: min(420px, 74vw); height: 12px; border-radius: 7px; background: rgba(0, 0, 0, 0.55); border: 1px solid #2a2f45; overflow: hidden; box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.6); }
+      #loader .fill { width: 0%; height: 100%; border-radius: 7px; background: linear-gradient(90deg, #b8860b, #f5c542); transition: width 0.25s ease; }
+      #loader .status { color: #8a92a6; font: 600 12px Bahnschrift, "Segoe UI", sans-serif; letter-spacing: 2px; }
+      #loader .spark { font-size: 30px; animation: loader-pulse 1.3s ease-in-out infinite; }
+      @keyframes loader-pulse { 0%, 100% { opacity: 0.5; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.06); } }
     </style>
   </head>
   <body>
@@ -33,6 +44,12 @@
         <strong>ROTATE TO LANDSCAPE</strong>
         <span>Wheel of Legends is designed for a wide battlefield.</span>
       </div>
+    </div>
+    <div id="loader" role="status" aria-live="polite">
+      <div class="spark">⚔️</div>
+      <div class="brand">WHEEL OF LEGENDS<small>SUMMONING THE ROSTER</small></div>
+      <div class="track"><div id="loader-bar" class="fill"></div></div>
+      <div id="loader-status" class="status">LOADING 0%</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
