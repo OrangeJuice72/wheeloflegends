@@ -159,7 +159,7 @@ export class SettingsModal extends Container {
 
   private quitToMenu(): void {
     this.game.sfx.click();
-    this.game.run = null;
+    this.game.endRun();
     this.onClose();
     this.game.goto(new MenuScene(this.game));
   }

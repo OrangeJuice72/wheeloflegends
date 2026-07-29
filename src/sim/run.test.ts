@@ -6,9 +6,10 @@ import type { ModifierId } from '../data/modifiers';
 import { Balance } from '../data/balance';
 import { getShopItem, itemPowerScore, ITEM_SPIN_PRICES, ITEM_SPIN_WEIGHTS, ITEM_TIER_ORDER, matchesItemAffinity, MYSTERY_ITEM_WEIGHTS, SHOP_ITEMS } from '../data/items';
 import { CHARACTERS, getCharacter } from '../data/characters';
-import { generateFloor, floorScale, isBossFloor } from './tower';
+import { generateFloor, floorScale, isBossFloor, floorKind, isCombatFloor } from './tower';
 import { Rng } from '../core/Rng';
 import { computeSynergies, combineBonuses } from './synergy';
+import { SYNERGIES } from '../data/synergies';
 import type { Rarity } from '../data/types';
 import { characterPowerScore, CURATED_RARITY, strengthTypes } from '../data/characterRules';
 import { BATTLEFIELDS } from '../data/battlefields';
@@ -141,6 +142,204 @@ describe('run modifiers', () => {
     expect(run.eligibleRecruitPool().length).toBe(CHARACTERS.length);
     expect(run.mode).toBe('tower');
     expect(run.draft).toBe(false);
+  });
+});
+
+describe('universe synergies', () => {
+  it('rewards fielding legends from one home universe', () => {
+    const pair = [getCharacter('superman'), getCharacter('batman')];
+    const active = computeSynergies(pair);
+    const dc = active.find((s) => s.def.id === 'dc-united');
+    expect(dc, 'two DC legends should bond').toBeTruthy();
+    expect(dc!.count).toBe(2);
+    expect(combineBonuses(active).atk).toBeGreaterThan(0);
+  });
+
+  it('scales with the third member of a universe', () => {
+    const two = combineBonuses(computeSynergies([getCharacter('superman'), getCharacter('batman')]));
+    const three = combineBonuses(computeSynergies([getCharacter('superman'), getCharacter('batman'), getCharacter('flash')]));
+    expect(three.atk).toBeGreaterThan(two.atk);
+  });
+
+  it('does not bond legends from different universes', () => {
+    const mixed = computeSynergies([getCharacter('superman'), getCharacter('mario')]);
+    expect(mixed.some((s) => s.def.franchise !== undefined)).toBe(false);
+  });
+
+  it('never counts a duplicate legend twice', () => {
+    const doubled = computeSynergies([getCharacter('superman'), getCharacter('superman')]);
+    expect(doubled.some((s) => s.def.id === 'dc-united')).toBe(false);
+  });
+
+  it('gives every playable universe a bond to build toward', () => {
+    const universes = new Set(CHARACTERS.map((c) => c.franchise));
+    for (const universe of universes) {
+      expect(SYNERGIES.some((s) => s.franchise === universe), `${universe} has no universe synergy`).toBe(true);
+    }
+    // Every synergy matches on exactly one axis.
+    for (const s of SYNERGIES) {
+      expect((s.tag === undefined) !== (s.franchise === undefined), `${s.id} must match a tag or a franchise`).toBe(true);
+    }
+  });
+});
+
+describe('floor event deck', () => {
+  it('keeps floor 1 and every boss floor a fight', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      expect(floorKind(1, seed)).toBe('battle');
+      for (let floor = Balance.tower.bossEvery; floor <= 40; floor += Balance.tower.bossEvery) {
+        expect(isCombatFloor(floorKind(floor, seed)), `seed ${seed} floor ${floor}`).toBe(true);
+      }
+    }
+  });
+
+  it('never places two event rooms back to back', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      for (let floor = 2; floor <= 60; floor++) {
+        if (!isCombatFloor(floorKind(floor, seed))) {
+          expect(isCombatFloor(floorKind(floor - 1, seed)), `seed ${seed} floor ${floor}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('is stable for a given floor and seed', () => {
+    for (let floor = 1; floor <= 30; floor++) expect(floorKind(floor, 777)).toBe(floorKind(floor, 777));
+  });
+
+  it('mixes fights with a meaningful minority of event rooms', () => {
+    let combat = 0;
+    let total = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      for (let floor = 2; floor <= 40; floor++) {
+        total++;
+        if (isCombatFloor(floorKind(floor, seed))) combat++;
+      }
+    }
+    const combatShare = combat / total;
+    expect(combatShare).toBeGreaterThan(0.6); // fighting stays the main course
+    expect(combatShare).toBeLessThan(0.95); // but events show up regularly
+  });
+
+  it('resolves each event room with a real reward', () => {
+    const run = new RunState(1, 'normal');
+    // treasure: an artifact plus coins
+    const treasure = new RunState(1, 'normal');
+    let found = { treasure: false, rest: false, merchant: false };
+    for (let seed = 1; seed <= 120 && !(found.treasure && found.rest && found.merchant); seed++) {
+      const probe = new RunState(seed, 'normal');
+      probe.addRecruit(getCharacter('superman'));
+      for (let floor = 2; floor <= 30; floor++) {
+        probe.floor = floor;
+        const kind = probe.currentFloor().kind;
+        if (kind === 'treasure' && !found.treasure) {
+          const before = probe.inventory.length;
+          const gold = probe.gold;
+          const out = probe.resolveEventFloor();
+          expect(probe.inventory.length).toBe(before + 1);
+          expect(probe.gold).toBeGreaterThan(gold);
+          expect(out.itemId).toBeTruthy();
+          found.treasure = true;
+        } else if (kind === 'rest' && !found.rest) {
+          probe.roster[0]!.hpPct = 0.3;
+          probe.resolveEventFloor();
+          expect(probe.roster[0]!.hpPct).toBe(1);
+          found.rest = true;
+        } else if (kind === 'merchant' && !found.merchant) {
+          const gold = probe.gold;
+          const spins = probe.spins;
+          probe.resolveEventFloor();
+          expect(probe.gold).toBeGreaterThan(gold);
+          expect(probe.spins).toBe(spins + 1);
+          found.merchant = true;
+        }
+      }
+    }
+    expect(found).toEqual({ treasure: true, rest: true, merchant: true });
+    expect(run.currentFloor().kind).toBe('battle');
+    expect(treasure.floor).toBe(1);
+  });
+
+  it('conquest ladders stay pure fights', () => {
+    const run = new RunState(9, 'normal', [], { mode: 'conquest' });
+    for (let node = 1; node <= run.conquestOrder.length; node++) {
+      run.floor = node;
+      expect(run.currentFloor().kind).toBe('battle');
+      expect(run.isEventFloor()).toBe(false);
+    }
+  });
+});
+
+describe('run save & resume', () => {
+  it('round-trips a climb: progress, roster, team, inventory and modifiers survive', () => {
+    const run = new RunState(1234, 'hard', ['glass-cannon', 'underdog'], { draft: true });
+    run.spins = 6;
+    run.spin();
+    run.addRecruit(getCharacter('superman'));
+    run.addRecruit(getCharacter('pikachu'));
+    run.floor = 7;
+    run.gold = 812;
+    run.relicAtk = 0.22;
+    run.kills = 31;
+    run.teamCostCap = 26;
+    run.inventory.push('mjolnir');
+    run.roster[0]!.hpPct = 0.42;
+    run.roster[0]!.level = 4;
+
+    const resumed = RunState.fromSave(JSON.parse(JSON.stringify(run.toSave())))!;
+    expect(resumed).not.toBeNull();
+    expect(resumed.floor).toBe(7);
+    expect(resumed.gold).toBe(812);
+    expect(resumed.kills).toBe(31);
+    expect(resumed.relicAtk).toBeCloseTo(0.22, 5);
+    expect(resumed.teamCostCap).toBe(26);
+    expect(resumed.inventory).toEqual(['mjolnir']);
+    expect(resumed.difficulty).toBe('hard');
+    expect(resumed.draft).toBe(true);
+    expect([...resumed.modifiers].sort()).toEqual(['glass-cannon', 'underdog']);
+    expect(resumed.roster.map((e) => e.defId)).toEqual(run.roster.map((e) => e.defId));
+    expect(resumed.roster[0]!.hpPct).toBeCloseTo(0.42, 5);
+    expect(resumed.roster[0]!.level).toBe(4);
+    expect(resumed.team).toEqual(run.team);
+  });
+
+  it('resumes the RNG mid-stream instead of replaying old draws', () => {
+    const run = new RunState(99, 'normal');
+    run.spins = 20;
+    for (let i = 0; i < 4; i++) run.spin();
+    const resumed = RunState.fromSave(JSON.parse(JSON.stringify(run.toSave())))!;
+    resumed.spins = 10;
+    run.spins = 10;
+    // Both continue from the same stream position → identical next draws.
+    expect(resumed.spin().id).toBe(run.spin().id);
+    // And a fresh run on the same seed would NOT be at that position.
+    const fresh = new RunState(99, 'normal');
+    fresh.spins = 10;
+    expect(fresh.spin().id).not.toBe(resumed.spin().id);
+  });
+
+  it('preserves a conquest ladder and its position', () => {
+    const run = new RunState(77, 'normal', [], { mode: 'conquest' });
+    run.floor = 4;
+    const resumed = RunState.fromSave(JSON.parse(JSON.stringify(run.toSave())))!;
+    expect(resumed.isConquest()).toBe(true);
+    expect([...resumed.conquestOrder]).toEqual([...run.conquestOrder]);
+    expect(resumed.conquestTarget()).toBe(run.conquestTarget());
+  });
+
+  it('rejects corrupt or unversioned saves instead of throwing', () => {
+    expect(RunState.fromSave(null as never)).toBeNull();
+    expect(RunState.fromSave({ v: 99 } as never)).toBeNull();
+    expect(RunState.fromSave({} as never)).toBeNull();
+  });
+
+  it('drops roster entries whose character no longer exists', () => {
+    const run = new RunState(5, 'normal');
+    run.addRecruit(getCharacter('superman'));
+    const save = JSON.parse(JSON.stringify(run.toSave()));
+    save.roster.push({ defId: 'deleted-legend', level: 1, hpPct: 1, heldItemId: null });
+    const resumed = RunState.fromSave(save)!;
+    expect(resumed.roster.map((e) => e.defId)).toEqual(['superman']);
   });
 });
 
@@ -376,6 +575,14 @@ describe('data validation', () => {
     expect(characterPowerScore(getCharacter('captain-america'))).toBeGreaterThan(characterPowerScore(getCharacter('sandy-cheeks')));
     expect(characterPowerScore(getCharacter('leonardo'))).toBeGreaterThan(characterPowerScore(getCharacter('pikachu')));
   });
+  it('never shows a legend as both strong against and weak to the same type', () => {
+    for (const character of CHARACTERS) {
+      expect(strengthTypes(character), character.id).not.toContain(character.weakness);
+      // …while still always offering at least one strength to read.
+      expect(strengthTypes(character).length, character.id).toBeGreaterThan(0);
+    }
+  });
+
   it('gives every character at least one battle strength and normalized stats', () => {
     for (const character of CHARACTERS) {
       expect(strengthTypes(character).length, character.id).toBeGreaterThan(0);

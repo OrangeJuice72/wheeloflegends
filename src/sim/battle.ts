@@ -10,6 +10,7 @@ import { exploitsWeakness } from '../data/characterRules';
 import type { AbilityDef, CharacterDef, EffectDef, StatusKind, TargetMode } from '../data/types';
 import { effectiveItemBoosts, getShopItem, itemBattleSummary, itemExtraActions, itemGrantedAbility } from '../data/items';
 import type { ItemBoosts } from '../data/items';
+import { getAffix, type AffixId } from '../data/affixes';
 import { combineBonuses, computeSynergies } from './synergy';
 import type { BattleEvent, BattleResult, Side, UnitResultStats } from './events';
 
@@ -23,6 +24,8 @@ export interface CombatantSpec {
   itemId?: string;
   /** Always-applied per-stat deltas from run modifiers; stacks on top of items. */
   extraBoosts?: ItemBoosts;
+  /** Elite modifier carried by this unit (elite rooms only). */
+  affix?: AffixId;
   boss?: boolean;
 }
 
@@ -71,6 +74,8 @@ interface Unit {
   itemAbility?: AbilityDef; // granted by a resonant artifact (the ITEM action)
   itemCd: number;
   extraActions: number;
+  affix?: AffixId; // elite modifier, if any
+  affixLifesteal: number; // fraction of damage dealt healed back (Vampiric)
   regenPerSec: number; // fraction of maxHp per second (passive + synergy)
   dodgeChance: number;
   ragePerHit: number;
@@ -99,14 +104,18 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
   const bossMult = spec.boss ? Balance.tower.bossStatMult : 1;
   const heldItem = spec.itemId ? getShopItem(spec.itemId) : undefined;
   const item = heldItem ? effectiveItemBoosts(heldItem, def) : spec.itemBoosts ?? {};
-  const extra = spec.extraBoosts ?? {};
+  // Run-modifier deltas and any elite affix stack on the same channel.
+  const affix = spec.affix ? getAffix(spec.affix) : undefined;
+  const runBoosts = spec.extraBoosts ?? {};
+  const affixBoosts = affix?.boosts ?? {};
+  const extra = (key: keyof ItemBoosts): number => (runBoosts[key] ?? 0) + (affixBoosts[key] ?? 0);
   const isFront = spec.slot < Balance.team.frontSlots;
-  const hpMult = levelMult * spec.statScale * bossMult * Math.max(0.1, 1 + synergyBonus.hp + (item.hp ?? 0) + (extra.hp ?? 0));
+  const hpMult = levelMult * spec.statScale * bossMult * Math.max(0.1, 1 + synergyBonus.hp + (item.hp ?? 0) + extra('hp'));
   const atkMult = levelMult * spec.statScale * bossMult
-    * (1 + synergyBonus.atk + (item.atk ?? 0) + (extra.atk ?? 0))
+    * (1 + synergyBonus.atk + (item.atk ?? 0) + extra('atk'))
     * (isFront ? 1 + B.frontAttackBonus : 1);
 
-  let regen = synergyBonus.regenPerSec;
+  let regen = synergyBonus.regenPerSec + (affix?.regenPerSec ?? 0);
   let dodge = 0;
   let ragePerHit = 0;
   let rageCap = 0;
@@ -120,20 +129,23 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
   }
 
   const maxHp = Math.round(def.stats.hp * hpMult);
+  const baseAtk = Math.round(def.stats.atk * atkMult);
   return {
     uid: `${side === 'player' ? 'p' : 'e'}${index}`,
     def,
     side,
     slot: spec.slot,
     boss: spec.boss ?? false,
+    affix: spec.affix,
+    affixLifesteal: affix?.lifesteal ?? 0,
     maxHp,
     hp: Math.max(1, Math.round(maxHp * spec.hpPct)),
-    baseAtk: Math.round(def.stats.atk * atkMult),
+    baseAtk,
     baseDef: def.stats.def
-      * (1 + synergyBonus.def + (item.def ?? 0) + (extra.def ?? 0))
+      * (1 + synergyBonus.def + (item.def ?? 0) + extra('def'))
       * (isFront ? 1 : 1 + B.backDefenseBonus),
-    baseSpd: def.stats.spd * (1 + synergyBonus.spd + (item.spd ?? 0) + (extra.spd ?? 0)),
-    baseCrit: def.stats.crit + synergyBonus.crit + (item.crit ?? 0) + (extra.crit ?? 0),
+    baseSpd: def.stats.spd * (1 + synergyBonus.spd + (item.spd ?? 0) + extra('spd')),
+    baseCrit: def.stats.crit + synergyBonus.crit + (item.crit ?? 0) + extra('crit'),
     critDmg: def.stats.critDmg,
     energyGainMult: 1 + synergyBonus.energyGain + (item.energyGain ?? 0),
     itemName: heldItem?.name,
@@ -150,7 +162,8 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     meter: 0,
     energy: 0,
     skillCd: 0,
-    shields: [],
+    // A Shielded elite starts the fight already behind its barrier.
+    shields: affix?.shieldMult ? [{ amount: Math.round(baseAtk * affix.shieldMult), timeLeft: Number.POSITIVE_INFINITY }] : [],
     statuses: [],
     buffs: [],
     alive: true,
@@ -293,6 +306,8 @@ export function simulateBattle(
     target.energy = Math.min(B.energyMax, target.energy + B.energyWhenStruck * target.energyGainMult);
     if (target.ragePerHit > 0) target.rageStacks++;
     emit({ t, kind: 'damage', source: source.uid, target: target.uid, amount, crit, weakness, hpAfter: target.hp, shielded });
+    // Vampiric elites drink from every blow they land.
+    if (source.affixLifesteal > 0 && amount > 0 && source.alive) applyHeal(source, source, amount * source.affixLifesteal);
     if (target.hp <= 0) {
       target.alive = false;
       source.kills++;

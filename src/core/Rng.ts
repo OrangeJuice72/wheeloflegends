@@ -9,6 +9,15 @@ export class Rng {
     this.state = seed >>> 0;
   }
 
+  /** Current stream position — persist this to resume a run mid-sequence. */
+  get streamState(): number {
+    return this.state;
+  }
+
+  set streamState(value: number) {
+    this.state = value >>> 0;
+  }
+
   /** Uniform float in [0, 1). */
   next(): number {
     this.state = (this.state + 0x9e3779b9) >>> 0;

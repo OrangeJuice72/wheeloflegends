@@ -16,6 +16,9 @@ import { glowTexture } from './fx/textures';
 //   src/assets/portraits/<characterId>.png   card portrait windows
 //   src/assets/franchises/<franchiseId>.png  slot reel 1 (universe logos)
 //   src/assets/rarities/<rarity>.png         shared rarity badges across the UI
+//
+// After dropping in new PNGs run `npm run assets`, which writes the WebP the
+// game actually loads. The PNGs remain as masters and are never shipped.
 function collectUrls(globbed: Record<string, string>): Map<string, string> {
   const map = new Map<string, string>();
   for (const [path, url] of Object.entries(globbed)) {
@@ -24,23 +27,26 @@ function collectUrls(globbed: Record<string, string>): Map<string, string> {
   return map;
 }
 
+// WebP only. The .png files beside these are kept as untouched masters, but
+// shipping them too would both double the bundle and make which file wins
+// ambiguous (the extension is stripped to derive the id).
 const portraitUrls = collectUrls(
-  import.meta.glob('../assets/portraits/**/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/portraits/**/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 const franchiseUrls = collectUrls(
-  import.meta.glob('../assets/franchises/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/franchises/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 const rarityUrls = collectUrls(
-  import.meta.glob('../assets/rarities/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/rarities/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 const backgroundUrls = collectUrls(
-  import.meta.glob('../assets/backgrounds/*.{png,jpg,jpeg,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/backgrounds/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 const battlefieldUrls = collectUrls(
-  import.meta.glob('../assets/battlefields/*.{png,jpg,jpeg,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/battlefields/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 const itemUrls = collectUrls(
-  import.meta.glob('../assets/items/*.{png,jpg,jpeg,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('../assets/items/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 
 const textureById = new Map<string, Texture>();

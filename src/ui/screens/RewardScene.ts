@@ -9,11 +9,10 @@ import { getShopItem, itemBoostSummary, ITEM_TIER_COLOR, SHOP_ITEMS } from '../.
 import { getFranchise } from '../../data/franchises';
 import type { ItemTier } from '../../data/items';
 import { isBossFloor } from '../../sim/tower';
-import { ConquestMapScene } from './ConquestMapScene';
 import { FxLayer } from '../fx/effects';
 import { glowTexture } from '../fx/textures';
 import { H, mix, Palette, RarityColor, Type, W } from '../theme';
-import { TeamScene } from './TeamScene';
+import { advanceToNextFloor } from './floorRouter';
 import { buildRarityIcon } from '../components/RarityIcon';
 import { buildItemIcon } from '../components/ItemIcon';
 
@@ -206,12 +205,9 @@ export class RewardScene extends Scene {
       }
       this.fx.burst(x + w / 2, y + h / 2, { color: Palette.gold, count: 26, speed: 320, size: 0.45 });
       Tweens.to(wrap.scale, { x: 1.06, y: 1.06 }, { duration: 0.18, ease: Easing.backOut });
-      const continueRun = () => {
-        this.run.advanceFloor();
-        // Conquest returns to the map (which routes to victory once every
-        // universe falls); the tower proceeds straight to formation.
-        this.game.goto(this.run.isConquest() ? new ConquestMapScene(this.game) : new TeamScene(this.game));
-      };
+      // Conquest returns to the map (which routes to victory once every
+      // universe falls); the tower routes by room type — fight or event.
+      const continueRun = () => advanceToNextFloor(this.game);
       const itemIds = typeof applied === 'string' ? [applied] : Array.isArray(applied) ? applied : [];
       if (itemIds.length === 0) {
         Tweens.delay(0.55, continueRun);

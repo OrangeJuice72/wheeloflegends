@@ -5,7 +5,9 @@ import { Scene } from '../../app/Scene';
 import type { Game } from '../../app/Game';
 import { randomSeed } from '../../core/Rng';
 import { Tweens, Easing } from '../../core/Tween';
-import { RunState } from '../../sim/run';
+import { RunState, type RunSave } from '../../sim/run';
+import { loadRunState } from '../../core/Save';
+import { enterCurrentFloor } from './floorRouter';
 import { backgroundTexture } from '../portraits';
 import { Fonts, H, Palette, W } from '../theme';
 import { SlotScene } from './SlotScene';
@@ -147,11 +149,13 @@ export class MenuScene extends Scene {
 
     const buttonTexture = backgroundTexture('start-menu-buttons');
     if (buttonTexture) {
-      const entries = [
+      const entries: [string, () => void][] = [
         ['NEW RUN', () => this.openSetup()],
         ['RECORD HALL', () => this.openRecords()],
         ['SETTINGS', () => this.openSettings()],
-      ] as const;
+      ];
+      // A climb in progress earns a CONTINUE at the top of the stack.
+      if (loadRunState<RunSave>()) entries.unshift(['CONTINUE', () => this.continueRun()]);
       this.buttons = entries.map(([label, action]) => {
         const button = new MenuActionButton(buttonTexture, label, this.game, action);
         this.menuLayer.addChild(button);
@@ -181,9 +185,13 @@ export class MenuScene extends Scene {
       this.menuLayer.position.copyFrom(art.position);
       this.menuLayer.scale.set(art.scale.x / REFERENCE_ART_SCALE, art.scale.y / REFERENCE_ART_SCALE);
     }
+    // Keep the stack centred on the art's button bay whatever the count, so the
+    // hand-tuned three-button layout is reproduced exactly and a fourth fits.
+    const centerY = (BUTTON_Y[0]! + BUTTON_Y[BUTTON_Y.length - 1]!) / 2;
+    const spacing = BUTTON_Y.length > 1 ? BUTTON_Y[1]! - BUTTON_Y[0]! : 70;
     this.buttons.forEach((button, index) => {
       button.scale.set(1);
-      button.position.set(0, BUTTON_Y[index] ?? BUTTON_Y[0]!);
+      button.position.set(0, centerY + (index - (this.buttons.length - 1) / 2) * spacing);
     });
   }
 
@@ -222,13 +230,30 @@ export class MenuScene extends Scene {
   }
 
   private startRun(config: RunConfig = { mode: 'tower', draft: false, modifiers: [] }): void {
-    this.game.run = new RunState(randomSeed(), this.game.meta.difficulty, config.modifiers, {
+    this.game.beginRun(new RunState(randomSeed(), this.game.meta.difficulty, config.modifiers, {
       mode: config.mode,
       draft: config.draft,
       monoFranchise: config.monoFranchise,
-    });
+    }));
     this.game.meta.totalRuns++;
     this.game.saveMeta();
     this.game.goto(config.mode === 'conquest' ? new ConquestMapScene(this.game) : new SlotScene(this.game));
+  }
+
+  /** Pick the saved climb back up exactly where it was left. */
+  private continueRun(): void {
+    const save = loadRunState<RunSave>();
+    const run = save ? RunState.fromSave(save) : null;
+    if (!run) {
+      this.game.toast('That saved run could not be loaded.', Palette.danger);
+      return;
+    }
+    this.game.beginRun(run);
+    if (!run.isConquest() && run.isEventFloor()) {
+      // Saved standing in an unresolved event room — finish it first.
+      enterCurrentFloor(this.game);
+      return;
+    }
+    this.game.goto(run.isConquest() ? new ConquestMapScene(this.game) : new SlotScene(this.game));
   }
 }

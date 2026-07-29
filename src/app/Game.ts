@@ -5,7 +5,7 @@
 
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { Tweens, Easing } from '../core/Tween';
-import { loadMeta, saveMeta, type MetaSave } from '../core/Save';
+import { clearRunState, loadMeta, saveMeta, saveRunState, type MetaSave } from '../core/Save';
 import { Sfx } from '../audio/Sfx';
 import type { RunState } from '../sim/run';
 import { AmbientBackground } from '../ui/fx/AmbientBackground';
@@ -19,6 +19,8 @@ export class Game {
   readonly sfx = new Sfx();
   meta: MetaSave = loadMeta();
   run: RunState | null = null;
+  /** True once a climb has ended, so autosave can't resurrect a dead run. */
+  private runConcluded = false;
 
   readonly bg = new AmbientBackground();
   /** Scaled/centered 1280×720 design space. */
@@ -121,6 +123,9 @@ export class Game {
         this.scene = next;
         this.shaker.addChild(next);
         next.onEnter();
+        // Autosave at every screen change: the single choke point that covers
+        // recruiting, formation, battle results, and reward picks.
+        this.saveRun();
         next.onResize(this.viewportDesignWidth, this.viewportDesignHeight);
         Tweens.to(this.overlay, { alpha: 0 }, {
           duration: 0.28,
@@ -195,5 +200,35 @@ export class Game {
 
   saveMeta(): void {
     saveMeta(this.meta);
+  }
+
+  /** Persist the active climb so closing the tab never destroys a run. */
+  saveRun(): void {
+    if (this.runConcluded) return; // a finished climb must never be resumable
+    if (this.run) saveRunState(this.run.toSave());
+    else clearRunState();
+  }
+
+  /** Start (or resume) a climb and let it autosave again. */
+  beginRun(run: RunState): void {
+    this.run = run;
+    this.runConcluded = false;
+    this.saveRun();
+  }
+
+  /**
+   * The climb has ended. Wipes the stored save but keeps `run` in memory so the
+   * summary can still be drawn from it.
+   */
+  discardSavedRun(): void {
+    this.runConcluded = true;
+    clearRunState();
+  }
+
+  /** Abandon the climb entirely (quit to menu). */
+  endRun(): void {
+    this.run = null;
+    this.runConcluded = true;
+    clearRunState();
   }
 }

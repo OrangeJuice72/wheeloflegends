@@ -11,6 +11,47 @@ function spec(defId: string, slot: number, overrides: Partial<CombatantSpec> = {
 const TEAM_A = [spec('shrek', 0), spec('captain-america', 1), spec('mario', 2), spec('pikachu', 3), spec('zelda', 4)];
 const TEAM_B = [spec('bowser', 0), spec('patrick', 1), spec('link', 2), spec('sonic', 3), spec('spongebob', 4)];
 
+describe('elite affixes', () => {
+  const spawnOf = (r: ReturnType<typeof simulateBattle>, side: string) =>
+    r.events.find((e) => e.kind === 'spawn' && (e as { side: string }).side === side) as
+      { maxHp: number; hp: number } | undefined;
+
+  it('Enraged trades health for damage', () => {
+    const plain = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 5);
+    const raged = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0, { affix: 'enraged' })], 5);
+    expect(spawnOf(raged, 'enemy')!.maxHp).toBeLessThan(spawnOf(plain, 'enemy')!.maxHp);
+  });
+
+  it('Armored raises effective bulk', () => {
+    const plain = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 7);
+    const armored = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0, { affix: 'armored' })], 7);
+    expect(spawnOf(armored, 'enemy')!.maxHp).toBeGreaterThan(spawnOf(plain, 'enemy')!.maxHp);
+  });
+
+  it('Shielded absorbs the opening damage', () => {
+    const shielded = simulateBattle([spec('goku', 0)], [spec('toad', 0, { affix: 'shielded' })], 11);
+    const firstHit = shielded.events.find((e) => e.kind === 'damage' && (e as { target: string }).target.startsWith('e'));
+    expect((firstHit as { shielded: boolean }).shielded).toBe(true);
+  });
+
+  it('an affixed elite is genuinely harder to kill than the same unit plain', () => {
+    let plainWins = 0;
+    let eliteWins = 0;
+    const team = [spec('superman', 0), spec('goku', 1), spec('elsa', 2)];
+    for (let seed = 1; seed <= 30; seed++) {
+      if (simulateBattle(team, [spec('bowser', 0), spec('toad', 1)], seed).winner === 'player') plainWins++;
+      if (simulateBattle(team, [spec('bowser', 0, { affix: 'armored' }), spec('toad', 1)], seed).winner === 'player') eliteWins++;
+    }
+    expect(eliteWins).toBeLessThanOrEqual(plainWins);
+  });
+
+  it('stays deterministic with an affix applied', () => {
+    const a = simulateBattle([spec('goku', 0)], [spec('bowser', 0, { affix: 'vampiric' })], 99);
+    const b = simulateBattle([spec('goku', 0)], [spec('bowser', 0, { affix: 'vampiric' })], 99);
+    expect(JSON.stringify(a.events)).toEqual(JSON.stringify(b.events));
+  });
+});
+
 describe('battle determinism', () => {
   it('same seed produces byte-identical event streams', () => {
     const a = simulateBattle(TEAM_A, TEAM_B, 12345);

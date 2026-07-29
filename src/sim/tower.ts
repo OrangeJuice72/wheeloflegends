@@ -1,18 +1,64 @@
 /** Tower floor generation: enemy team composition and scaling per floor. */
 
-import type { Rng } from '../core/Rng';
+import { Rng } from '../core/Rng';
 import { Balance } from '../data/balance';
 import { CHARACTERS } from '../data/characters';
 import { characterPowerScore } from '../data/characterRules';
+import { AFFIXES } from '../data/affixes';
 import { getFranchise } from '../data/franchises';
 import type { CharacterDef } from '../data/types';
 import type { CombatantSpec } from './battle';
 
+/**
+ * What kind of room a floor is. `battle`/`elite` are fought; the rest resolve
+ * as events so a climb isn't an unbroken chain of identical fights.
+ */
+export type FloorKind = 'battle' | 'elite' | 'treasure' | 'rest' | 'merchant';
+
 export interface FloorInfo {
   floor: number;
   isBoss: boolean;
+  kind: FloorKind;
   title: string;
   enemies: CombatantSpec[];
+}
+
+/** True when the room is resolved by fighting rather than by an event screen. */
+export function isCombatFloor(kind: FloorKind): boolean {
+  return kind === 'battle' || kind === 'elite';
+}
+
+const KIND_WEIGHTS: [FloorKind, number][] = [
+  ['battle', 54],
+  ['elite', 16],
+  ['treasure', 12],
+  ['rest', 10],
+  ['merchant', 8],
+];
+
+/**
+ * A floor's room type — a pure function of (floor, seed) so re-entering a floor
+ * is always stable. Floor 1 and boss floors are always fights, and two event
+ * rooms never appear back to back (which also guarantees event chains end).
+ */
+function rollKind(floor: number, seed: number): FloorKind {
+  if (floor <= 1 || isBossFloor(floor)) return 'battle';
+  const roll = new Rng((seed ^ (floor * 0x85ebca6b)) >>> 0).next();
+  const total = KIND_WEIGHTS.reduce((sum, [, w]) => sum + w, 0);
+  let cursor = roll * total;
+  for (const [candidate, weight] of KIND_WEIGHTS) {
+    cursor -= weight;
+    if (cursor <= 0) return candidate;
+  }
+  return 'battle';
+}
+
+export function floorKind(floor: number, seed: number): FloorKind {
+  const kind = rollKind(floor, seed);
+  // Never two event rooms back to back — compares against the neighbour's raw
+  // roll so this stays O(1) rather than walking the whole tower.
+  if (!isCombatFloor(kind) && !isCombatFloor(rollKind(floor - 1, seed))) return 'battle';
+  return kind;
 }
 
 const FLOOR_TITLES = [
@@ -43,10 +89,12 @@ function assignSlots(defs: CharacterDef[]): { def: CharacterDef; slot: number }[
   return byBulk.map((def, i) => ({ def, slot: order[i] ?? i }));
 }
 
-export function generateFloor(floor: number, rng: Rng): FloorInfo {
+export function generateFloor(floor: number, rng: Rng, kind: FloorKind = 'battle'): FloorInfo {
   const boss = isBossFloor(floor);
-  const budget = Balance.tower.budgetBase + Balance.tower.budgetPerFloor * (floor - 1);
-  const scale = floorScale(floor);
+  const elite = kind === 'elite';
+  // Elites field a slightly richer squad and hit harder than a normal room.
+  const budget = Balance.tower.budgetBase + Balance.tower.budgetPerFloor * (floor - 1) + (elite ? 3 : 0);
+  const scale = floorScale(floor) * (elite ? 1.12 : 1);
 
   const picked: CharacterDef[] = [];
   let spent = 0;
@@ -73,20 +121,28 @@ export function generateFloor(floor: number, rng: Rng): FloorInfo {
   }
 
   const level = 1 + Math.floor((floor - 1) / 4);
-  const enemies: CombatantSpec[] = assignSlots(picked).map(({ def, slot }) => ({
+  // An elite room is led by one modified enemy — the affix, not the numbers,
+  // is what makes the fight memorable.
+  const eliteAffix = elite ? rng.pick(AFFIXES).id : undefined;
+  const seats = assignSlots(picked);
+  const championId = elite ? seats[0]?.def.id : undefined;
+  const enemies: CombatantSpec[] = seats.map(({ def, slot }) => ({
     defId: def.id,
     level: Math.min(level, Balance.level.max),
     slot,
     hpPct: 1,
     statScale: scale,
+    ...(eliteAffix && def.id === championId ? { affix: eliteAffix } : {}),
     boss: boss && def.id === bossDef?.id,
   }));
 
   const title = boss
     ? `${bossDef?.name.toUpperCase()} — TOWER GUARDIAN`
-    : (FLOOR_TITLES[(floor - 1) % FLOOR_TITLES.length] as string);
+    : elite
+      ? `ELITE — ${FLOOR_TITLES[(floor - 1) % FLOOR_TITLES.length]}`
+      : (FLOOR_TITLES[(floor - 1) % FLOOR_TITLES.length] as string);
 
-  return { floor, isBoss: boss, title, enemies };
+  return { floor, isBoss: boss, kind, title, enemies };
 }
 
 /**
@@ -138,5 +194,6 @@ export function generateConquestNode(nodeIndex: number, universe: string, totalN
 
   const universeName = getFranchise(universe).name.toUpperCase();
   const title = isFinal ? `${universeName} — FINAL STAND` : `${universeName} STRONGHOLD`;
-  return { floor: nodeIndex, isBoss: isFinal, title, enemies };
+  // Conquest is a fixed ladder of themed fights — no event rooms.
+  return { floor: nodeIndex, isBoss: isFinal, kind: 'battle', title, enemies };
 }

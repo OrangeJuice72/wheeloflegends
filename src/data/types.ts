@@ -104,7 +104,10 @@ export interface CharacterDef {
 export interface SynergyDef {
   id: string;
   name: string;
-  tag: Tag;
+  /** Match by shared tag… */
+  tag?: Tag;
+  /** …or by shared home universe (franchise id). Exactly one is set. */
+  franchise?: string;
   icon: string;
   /** Sorted ascending by count. */
   thresholds: { count: number; desc: string; bonus: SynergyBonus }[];

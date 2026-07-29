@@ -10,6 +10,7 @@ import { Tweens, Easing } from '../../core/Tween';
 import { Balance } from '../../data/balance';
 import { getCharacter } from '../../data/characters';
 import { getShopItem } from '../../data/items';
+import { getAffix } from '../../data/affixes';
 import { computeSynergies } from '../../sim/synergy';
 import { Button } from '../components/Button';
 import { Panel } from '../components/Panel';
@@ -126,6 +127,25 @@ export class TeamScene extends Scene {
       scout.content.addChild(card);
       this.scoutCards.push(card);
     });
+    // Warn about an elite's modifier — it must never be a hidden mechanic.
+    const eliteSpec = floor.enemies.find((spec) => spec.affix);
+    if (eliteSpec?.affix) {
+      const affix = getAffix(eliteSpec.affix);
+      const warnBg = new Graphics()
+        .roundRect(10, 318, 230, 34, 8)
+        .fill({ color: Palette.black, alpha: 0.5 })
+        .stroke({ color: Palette.danger, width: 1.5 });
+      const warn = new Text({ text: `${affix.icon} ELITE · ${affix.name.toUpperCase()}`, style: Type.tiny() });
+      warn.style.fill = Palette.danger;
+      warn.position.set(20, 324);
+      const detail = new Text({ text: affix.short, style: Type.small() });
+      detail.style.fontSize = 10;
+      detail.style.fill = Palette.textDim;
+      detail.position.set(20, 338);
+      if (detail.width > 212) detail.scale.set(212 / detail.width);
+      scout.content.addChild(warnBg, warn, detail);
+    }
+
     const threat = new Text({
       text: this.threatLabel(),
       style: Type.small(),

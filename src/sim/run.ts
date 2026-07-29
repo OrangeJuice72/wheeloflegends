@@ -12,7 +12,7 @@ import type { ItemBoosts, ItemTier, ShopItemDef } from '../data/items';
 import type { ModifierId } from '../data/modifiers';
 import type { CombatantSpec } from './battle';
 import type { BattleResult } from './events';
-import { generateConquestNode, generateFloor, type FloorInfo } from './tower';
+import { floorKind, generateConquestNode, generateFloor, isCombatFloor, type FloorInfo } from './tower';
 import type { Difficulty } from '../core/Save';
 
 /** Run structure. 'tower' is the endless climb; 'conquest' is a universe ladder. */
@@ -72,6 +72,38 @@ export interface RewardChoice {
   apply: (run: RunState) => void | string | string[];
 }
 
+/** A run frozen to plain JSON so a climb survives closing the tab. */
+export interface RunSave {
+  v: 1;
+  seed: number;
+  difficulty: Difficulty;
+  mode: GameMode;
+  draft: boolean;
+  modifiers: ModifierId[];
+  monoFranchise: string | null;
+  conquestOrder: string[];
+  floor: number;
+  gold: number;
+  spins: number;
+  spinsBought: number;
+  roster: RosterEntry[];
+  team: (number | null)[];
+  relicAtk: number;
+  relicHp: number;
+  goldEarned: number;
+  lastBattleCoins: number;
+  kills: number;
+  inventory: string[];
+  teamCostCap: number;
+  teamCostUpgrades: number;
+  battlefieldId: string | null;
+  /** Stream positions so resuming never replays the same draws. */
+  rngState: number;
+  battleRngState: number;
+  /** Last battle without its event log (kept small); powers the run summary. */
+  lastBattle: Pick<BattleResult, 'winner' | 'duration' | 'units'> | null;
+}
+
 export class RunState {
   readonly seed: number;
   readonly rng: Rng; // recruit + reward stream
@@ -125,6 +157,80 @@ export class RunState {
       ? (chosen && universes.includes(chosen) ? chosen : meta.pick(universes))
       : null;
     this.conquestOrder = this.mode === 'conquest' ? meta.shuffle(universes) : [];
+  }
+
+  // ── persistence ────────────────────────────────────────────────────────
+  /** Freeze the whole climb to plain JSON (drops the bulky battle event log). */
+  toSave(): RunSave {
+    return {
+      v: 1,
+      seed: this.seed,
+      difficulty: this.difficulty,
+      mode: this.mode,
+      draft: this.draft,
+      modifiers: [...this.modifiers],
+      monoFranchise: this.monoFranchise,
+      conquestOrder: [...this.conquestOrder],
+      floor: this.floor,
+      gold: this.gold,
+      spins: this.spins,
+      spinsBought: this.spinsBought,
+      roster: this.roster.map((entry) => ({ ...entry })),
+      team: [...this.team],
+      relicAtk: this.relicAtk,
+      relicHp: this.relicHp,
+      goldEarned: this.goldEarned,
+      lastBattleCoins: this.lastBattleCoins,
+      kills: this.kills,
+      inventory: [...this.inventory],
+      teamCostCap: this.teamCostCap,
+      teamCostUpgrades: this.teamCostUpgrades,
+      battlefieldId: this.battlefieldId,
+      rngState: this.rng.streamState,
+      battleRngState: this.battleRng.streamState,
+      lastBattle: this.lastBattle
+        ? { winner: this.lastBattle.winner, duration: this.lastBattle.duration, units: this.lastBattle.units }
+        : null,
+    };
+  }
+
+  /** Rebuild a climb from a save; returns null if the data is unusable. */
+  static fromSave(save: RunSave): RunState | null {
+    try {
+      if (!save || save.v !== 1) return null;
+      const run = new RunState(save.seed, save.difficulty, save.modifiers ?? [], {
+        mode: save.mode,
+        draft: save.draft,
+        monoFranchise: save.monoFranchise,
+      });
+      const writable = run as unknown as { conquestOrder: readonly string[]; battleRng: Rng };
+      if (save.conquestOrder) writable.conquestOrder = [...save.conquestOrder];
+      run.floor = save.floor;
+      run.gold = save.gold;
+      run.spins = save.spins;
+      run.spinsBought = save.spinsBought;
+      // Drop roster entries whose character no longer exists (roster edits between builds).
+      run.roster = (save.roster ?? []).filter((entry) => CHARACTERS.some((c) => c.id === entry.defId));
+      const dropped = (save.roster ?? []).length !== run.roster.length;
+      run.team = dropped
+        ? [null, null, null, null, null]
+        : (save.team ?? [null, null, null, null, null]).map((slot) => (slot !== null && slot < run.roster.length ? slot : null));
+      run.relicAtk = save.relicAtk;
+      run.relicHp = save.relicHp;
+      run.goldEarned = save.goldEarned;
+      run.lastBattleCoins = save.lastBattleCoins;
+      run.kills = save.kills;
+      run.inventory = (save.inventory ?? []).filter((id) => SHOP_ITEMS.some((item) => item.id === id));
+      run.teamCostCap = save.teamCostCap;
+      run.teamCostUpgrades = save.teamCostUpgrades;
+      run.battlefieldId = save.battlefieldId;
+      run.rng.streamState = save.rngState;
+      writable.battleRng.streamState = save.battleRngState;
+      run.lastBattle = save.lastBattle ? { ...save.lastBattle, events: [] } : null;
+      return run;
+    } catch {
+      return null; // corrupt save — the player starts fresh rather than crashing
+    }
   }
 
   // ── conquest ───────────────────────────────────────────────────────────
@@ -288,7 +394,7 @@ export class RunState {
     const rng = new Rng((this.seed ^ (this.floor * 0x9e3779b9)) >>> 0);
     const generated = this.mode === 'conquest'
       ? generateConquestNode(this.floor, this.conquestTarget() ?? this.conquestOrder[this.conquestOrder.length - 1]!, this.conquestOrder.length, rng)
-      : generateFloor(this.floor, rng);
+      : generateFloor(this.floor, rng, floorKind(this.floor, this.seed));
     const difficultyScale = Balance.difficulty[this.difficulty];
     const levelBonus = Balance.difficultyLevelBonus[this.difficulty];
     return {
@@ -303,6 +409,44 @@ export class RunState {
 
   nextBattleSeed(): number {
     return Math.floor(this.battleRng.next() * 4294967296);
+  }
+
+  /** True when this floor is an event room rather than a fight. */
+  isEventFloor(): boolean {
+    return !isCombatFloor(this.currentFloor().kind);
+  }
+
+  /**
+   * Apply a non-combat room's reward and describe it for the event screen.
+   * Safe to call once per floor — the caller advances afterwards.
+   */
+  resolveEventFloor(): { icon: string; title: string; detail: string; itemId?: string } {
+    const kind = this.currentFloor().kind;
+    if (kind === 'treasure') {
+      const item = this.rollMysteryItem();
+      this.inventory.push(item.id);
+      const coins = 60 + this.floor * Balance.rewards.goldPerFloor;
+      this.gold += coins;
+      this.goldEarned += coins;
+      return {
+        icon: '💎', title: 'TREASURE VAULT',
+        detail: `You uncover ${item.name} and ${coins.toLocaleString('en-US')} coins.`,
+        itemId: item.id,
+      };
+    }
+    if (kind === 'rest') {
+      for (const entry of this.roster) entry.hpPct = 1;
+      return { icon: '🔥', title: 'CAMPFIRE', detail: 'Your legends rest. The whole roster is fully restored.' };
+    }
+    // merchant
+    const coins = 150 + this.floor * Balance.rewards.goldPerFloor * 2;
+    this.gold += coins;
+    this.goldEarned += coins;
+    this.spins += 1;
+    return {
+      icon: '🛒', title: 'WANDERING MERCHANT',
+      detail: `A trader pays well for tower relics: ${coins.toLocaleString('en-US')} coins and a free pull.`,
+    };
   }
 
   /** Per-stat deltas from modifiers, applied on top of items and synergies. */
@@ -502,7 +646,9 @@ export class RunState {
     // from the other pools so the player still gets a full spread of choices.
     const suddenDeath = this.hasModifier('sudden-death');
     const categories = suddenDeath ? [economy, power, gear] : [economy, recovery, power, gear];
-    const target = boss ? R.bossChoices : R.choices;
+    // Elites are harder than a normal room, so they pay out like a boss.
+    const elite = this.currentFloor().kind === 'elite';
+    const target = boss || elite ? R.bossChoices : R.choices;
 
     const choices: RewardChoice[] = [];
     const used = new Set<string>();

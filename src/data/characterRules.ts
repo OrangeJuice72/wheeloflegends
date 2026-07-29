@@ -144,7 +144,21 @@ export function threatTypes(def: CharacterDef): Set<WeaknessType> {
   return types;
 }
 
-export function strengthTypes(def: CharacterDef): WeaknessType[] { return [...threatTypes(def)]; }
+/**
+ * Threat types shown to the player. A legend's own weakness is filtered out so
+ * a sheet never claims someone is both strong against and weak to the same
+ * type. Combat still uses `threatTypes` directly, so this is display-only.
+ */
+export function strengthTypes(def: CharacterDef): WeaknessType[] {
+  const withoutOwnWeakness = [...threatTypes(def)].filter((type) => type !== def.weakness);
+  if (withoutOwnWeakness.length > 0) return withoutOwnWeakness;
+  // The legend's only threat is the very type it is weak to (e.g. Patrick).
+  // Fall back to the closest fitting alternative so the sheet stays coherent.
+  const fallback: WeaknessType[] = def.stats.atk >= 12500 || def.stats.hp >= 150000
+    ? ['power', 'speed', 'energy', 'precision']
+    : ['precision', 'speed', 'power', 'energy'];
+  return [fallback.find((type) => type !== def.weakness) ?? 'power'];
+}
 export function strengthSummary(def: CharacterDef, limit = 2): string {
   return strengthTypes(def).slice(0, limit).map((type) => WEAKNESS_LABEL[type]).join(' · ');
 }

@@ -27,6 +27,10 @@ export class SummaryScene extends Scene {
     }
     const victory = run.conquestComplete();
     const newBest = !victory && run.floor >= this.game.meta.bestFloor && run.floor > 1;
+    // The climb is over: drop the stored save so it can never be resumed, but
+    // keep the in-memory run around to render this summary.
+    this.game.discardSavedRun();
+    const replay = { mode: run.mode, draft: run.draft, modifiers: [...run.modifiers] };
 
     const banner = new Text({
       text: victory ? '★  UNIVERSES CONQUERED  ★' : 'THE TOWER CLAIMS YOU',
@@ -98,15 +102,13 @@ export class SummaryScene extends Scene {
       height: 60,
       onClick: () => {
         // Carry the same mode, recruit style, and modifiers into the next run.
-        const prev = this.game.run;
-        const modifiers = [...(prev?.modifiers ?? [])];
-        this.game.run = new RunState(randomSeed(), this.game.meta.difficulty, modifiers, {
-          mode: prev?.mode ?? 'tower',
-          draft: prev?.draft ?? false,
-        });
+        this.game.beginRun(new RunState(randomSeed(), this.game.meta.difficulty, replay.modifiers, {
+          mode: replay.mode,
+          draft: replay.draft,
+        }));
         this.game.meta.totalRuns++;
         this.game.saveMeta();
-        this.game.goto(prev?.mode === 'conquest' ? new ConquestMapScene(this.game) : new SlotScene(this.game));
+        this.game.goto(replay.mode === 'conquest' ? new ConquestMapScene(this.game) : new SlotScene(this.game));
       },
     });
     again.position.set(W / 2 - 160, 560);
@@ -115,7 +117,7 @@ export class SummaryScene extends Scene {
       height: 54,
       variant: 'secondary',
       onClick: () => {
-        this.game.run = null;
+        this.game.endRun();
         this.game.goto(new MenuScene(this.game));
       },
     });

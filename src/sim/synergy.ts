@@ -19,10 +19,15 @@ export function computeSynergies(team: readonly CharacterDef[]): ActiveSynergy[]
     if (seen.has(c.id)) continue;
     seen.add(c.id);
     for (const tag of c.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    // Universe counts live in the same map behind a prefix so they can never
+    // collide with a tag of the same name.
+    const key = `franchise:${c.franchise}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const active: ActiveSynergy[] = [];
   for (const def of SYNERGIES) {
-    const count = counts.get(def.tag) ?? 0;
+    const key = def.franchise !== undefined ? `franchise:${def.franchise}` : def.tag;
+    const count = key !== undefined ? counts.get(key) ?? 0 : 0;
     let tierIndex = -1;
     for (let i = 0; i < def.thresholds.length; i++) {
       if (count >= (def.thresholds[i]?.count ?? Infinity)) tierIndex = i;

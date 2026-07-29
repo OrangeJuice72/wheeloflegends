@@ -78,3 +78,35 @@ export function saveMeta(meta: MetaSave): void {
     // Storage unavailable (private mode etc.) — the game must keep playing.
   }
 }
+
+// ── in-progress run ───────────────────────────────────────────────────────
+// Stored separately from meta so a corrupt run never costs the player their
+// records, and clearing one never touches the other.
+const RUN_KEY = 'wheel-of-legends.run';
+
+/** Persist the active climb. Accepts the plain object from RunState.toSave(). */
+export function saveRunState(save: unknown): void {
+  try {
+    localStorage.setItem(RUN_KEY, JSON.stringify(save));
+  } catch {
+    // Out of quota or storage disabled — play continues, just without resume.
+  }
+}
+
+/** Raw saved climb, or null when there is nothing to resume. */
+export function loadRunState<T>(): T | null {
+  try {
+    const raw = localStorage.getItem(RUN_KEY);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearRunState(): void {
+  try {
+    localStorage.removeItem(RUN_KEY);
+  } catch {
+    // Nothing to do — a stale save is harmless.
+  }
+}
