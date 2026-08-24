@@ -17,6 +17,19 @@ export interface RunRecords {
   legendDodges: StatRecord; // most dodges by a single legend in one battle
 }
 
+export interface CareerStats {
+  battlesPlayed: number;
+  battlesWon: number;
+  battlesLost: number;
+  bossesDefeated: number;
+  ultimatesUsed: number;
+  totalGoldEarned: number;
+  currentWinStreak: number;
+  longestWinStreak: number;
+  /** Deployment count powers the Codex's favorite-legend statistic. */
+  legendDeployments: Record<string, number>;
+}
+
 export interface MetaSave {
   version: 2;
   bestFloor: number;
@@ -28,6 +41,10 @@ export interface MetaSave {
   defaultAutoBattle: boolean;
   defaultBattleSpeed: BattleSpeed;
   records: RunRecords;
+  career: CareerStats;
+  discoveredLegendIds: string[];
+  discoveredRelicIds: string[];
+  defeatedBossIds: string[];
 }
 
 const KEY = 'wheel-of-legends.meta';
@@ -38,6 +55,20 @@ export function emptyRecords(): RunRecords {
     teamDamage: { value: 0, detail: '' },
     legendHeals: { value: 0, detail: '' },
     legendDodges: { value: 0, detail: '' },
+  };
+}
+
+export function emptyCareerStats(): CareerStats {
+  return {
+    battlesPlayed: 0,
+    battlesWon: 0,
+    battlesLost: 0,
+    bossesDefeated: 0,
+    ultimatesUsed: 0,
+    totalGoldEarned: 0,
+    currentWinStreak: 0,
+    longestWinStreak: 0,
+    legendDeployments: {},
   };
 }
 
@@ -52,12 +83,16 @@ const DEFAULTS: MetaSave = {
   defaultAutoBattle: false,
   defaultBattleSpeed: 1,
   records: emptyRecords(),
+  career: emptyCareerStats(),
+  discoveredLegendIds: [],
+  discoveredRelicIds: [],
+  defeatedBossIds: [],
 };
 
 export function loadMeta(): MetaSave {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return { ...DEFAULTS, records: emptyRecords() };
+    if (!raw) return { ...DEFAULTS, records: emptyRecords(), career: emptyCareerStats(), discoveredLegendIds: [], discoveredRelicIds: [], defeatedBossIds: [] };
     const parsed = JSON.parse(raw) as Partial<MetaSave>;
     // Merge forward so saves from before records existed gain the new fields.
     return {
@@ -65,9 +100,17 @@ export function loadMeta(): MetaSave {
       ...parsed,
       version: 2,
       records: { ...emptyRecords(), ...(parsed.records ?? {}) },
+      career: {
+        ...emptyCareerStats(),
+        ...(parsed.career ?? {}),
+        legendDeployments: { ...(parsed.career?.legendDeployments ?? {}) },
+      },
+      discoveredLegendIds: [...new Set(parsed.discoveredLegendIds ?? [])],
+      discoveredRelicIds: [...new Set(parsed.discoveredRelicIds ?? [])],
+      defeatedBossIds: [...new Set(parsed.defeatedBossIds ?? [])],
     };
   } catch {
-    return { ...DEFAULTS, records: emptyRecords() };
+    return { ...DEFAULTS, records: emptyRecords(), career: emptyCareerStats(), discoveredLegendIds: [], discoveredRelicIds: [], defeatedBossIds: [] };
   }
 }
 

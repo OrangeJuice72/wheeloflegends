@@ -12,11 +12,11 @@ import { getCharacter } from '../../data/characters';
 import { WEAKNESS_LABEL } from '../../data/characterRules';
 import { getFranchise } from '../../data/franchises';
 import { getBattlefield } from '../../data/battlefields';
-import type { BattleAbilitySlot, BattleChoice, CombatantSpec } from '../../sim/battle';
+import type { AutoStrategy, BattleAbilitySlot, BattleChoice, CombatantSpec } from '../../sim/battle';
 import type { CharacterDef, StatusKind } from '../../data/types';
 import { simulateBattle } from '../../sim/battle';
 import { applyBattleRecords } from '../../sim/records';
-import type { BattleEvent, BattleResult, Side } from '../../sim/events';
+import type { BattleEvent, BattleResult, Side, UnitSnapshot } from '../../sim/events';
 import { Button } from '../components/Button';
 import { Panel } from '../components/Panel';
 import { CharacterCard } from '../components/CharacterCard';
@@ -57,9 +57,12 @@ export class BattleScene extends Scene {
   private finished = false;
   private activeAttack = new Map<string, { fx: string; color: number }>();
   private banner: Container | null = null;
+  private ultimateCallout: Container | null = null;
   private speedButtons: Button[] = [];
   private autoButton!: Button;
   private autoMode = false;
+  private autoStrategy: AutoStrategy = 'balanced';
+  private strategyButton!: Button;
   private playerSpecs: CombatantSpec[] = [];
   private enemySpecs: CombatantSpec[] = [];
   private battleSeed = 0;
@@ -70,6 +73,8 @@ export class BattleScene extends Scene {
   private decisionTitle!: Text;
   private decisionButtons = new Map<BattleAbilitySlot, Button>();
   private decisionMeta = new Map<BattleAbilitySlot, Text>();
+  private targetOverlays: Container[] = [];
+  private turnPanel = new Container();
   private cardLayer = new Container();
   private backdrop!: BattleBackdrop;
 
@@ -169,6 +174,16 @@ export class BattleScene extends Scene {
     this.addChild(this.autoButton);
     this.refreshAutoButton();
 
+    this.strategyButton = new Button('AI BAL', this.game.sfx, {
+      width: 112,
+      height: 36,
+      variant: 'ghost',
+      onClick: () => this.cycleAutoStrategy(),
+    });
+    this.strategyButton.position.set(1214, 102);
+    this.addChild(this.strategyButton);
+    this.refreshStrategyButton();
+
     // Team synergies sit in the lower center, clear of both formations.
     const synergies = this.result.events.filter((e): e is Extract<BattleEvent, { kind: 'synergy' }> => e.kind === 'synergy' && e.side === 'player');
     if (synergies.length > 0) {
@@ -220,6 +235,8 @@ export class BattleScene extends Scene {
       Tweens.to(card, { x: pos.x, alpha: 1 }, { duration: 0.45, delay: 0.08 * e.slot + (e.side === 'enemy' ? 0.15 : 0), ease: Easing.backOut });
     }
 
+    this.buildTurnOrderPanel();
+
     this.addChild(this.fx);
     this.buildDecisionPanel();
 
@@ -242,6 +259,7 @@ export class BattleScene extends Scene {
     return simulateBattle(this.playerSpecs, this.enemySpecs, this.battleSeed, {
       manual: !this.autoMode,
       choices: this.choices,
+      autoStrategy: this.autoStrategy,
     });
   }
 
@@ -253,9 +271,11 @@ export class BattleScene extends Scene {
     this.eventIndex = replayIndex;
     this.pendingDecision = null;
     this.decisionPanel.visible = false;
+    this.clearTargetSelection();
     this.speed = resumeSpeed;
     this.pausedSpeed = null;
     this.refreshAutoButton();
+    this.refreshStrategyButton();
     this.refreshSpeedButtons();
     this.log(on ? 'Auto battle enabled' : 'Manual commands enabled', on ? Palette.blue : Palette.gold, 'system');
   }
@@ -264,6 +284,73 @@ export class BattleScene extends Scene {
     if (!this.autoButton) return;
     this.autoButton.setLabel(this.autoMode ? 'AUTO ON' : 'AUTO OFF');
     this.autoButton.alpha = this.autoMode ? 1 : 0.72;
+  }
+
+  private cycleAutoStrategy(): void {
+    const strategies: AutoStrategy[] = ['balanced', 'aggressive', 'defensive', 'conserve'];
+    const next = (strategies.indexOf(this.autoStrategy) + 1) % strategies.length;
+    this.autoStrategy = strategies[next]!;
+    this.refreshStrategyButton();
+    if (this.autoMode) {
+      const replayIndex = this.eventIndex;
+      this.result = this.simulateCurrentBattle();
+      this.eventIndex = replayIndex;
+    }
+  }
+
+  private refreshStrategyButton(): void {
+    if (!this.strategyButton) return;
+    const labels: Record<AutoStrategy, string> = {
+      balanced: 'AI BAL', aggressive: 'AI ATK', defensive: 'AI DEF', conserve: 'AI HOLD',
+    };
+    this.strategyButton.setLabel(labels[this.autoStrategy]);
+    this.strategyButton.alpha = this.autoMode ? 1 : 0.62;
+  }
+
+  private buildTurnOrderPanel(): void {
+    const bg = new Graphics()
+      .roundRect(-286, -22, 572, 46, 12)
+      .fill({ color: Palette.black, alpha: 0.72 })
+      .stroke({ color: Palette.borderLight, width: 1.3, alpha: 0.72 });
+    this.turnPanel.position.set(640, 112);
+    this.turnPanel.addChild(bg);
+    this.addChild(this.turnPanel);
+  }
+
+  private renderTurnOrder(order: readonly string[], snapshots: readonly UnitSnapshot[]): void {
+    while (this.turnPanel.children.length > 1) {
+      this.turnPanel.removeChildAt(1).destroy({ children: true });
+    }
+    const next = new Text({ text: 'NEXT', style: Type.tiny() });
+    next.style.fill = Palette.gold;
+    next.anchor.set(0.5);
+    next.position.set(-254, 0);
+    this.turnPanel.addChild(next);
+    const byUid = new Map(snapshots.map((snapshot) => [snapshot.uid, snapshot]));
+    order.slice(0, 6).forEach((uid, index) => {
+      const view = this.views.get(uid);
+      if (!view) return;
+      const snapshot = byUid.get(uid);
+      const x = -205 + index * 82;
+      const color = view.side === 'player' ? Palette.blue : Palette.danger;
+      const chip = new Graphics()
+        .roundRect(x - 37, -16, 74, 32, 8)
+        .fill({ color: mix(color, Palette.black, 0.72), alpha: 0.92 })
+        .stroke({ color, width: index === 0 ? 2 : 1, alpha: 0.82 });
+      const name = new Text({ text: view.name.split(' ')[0]!.slice(0, 9).toUpperCase(), style: Type.tiny() });
+      name.style.fill = Palette.white;
+      name.anchor.set(0.5);
+      name.position.set(x, -6);
+      const intent = new Text({
+        text: view.side === 'enemy' ? (snapshot?.intent ?? 'basic').toUpperCase() : `${Math.round(snapshot?.meter ?? 0)}%`,
+        style: Type.tiny(),
+      });
+      intent.style.fontSize = 8;
+      intent.style.fill = view.side === 'enemy' ? Palette.danger : Palette.energy;
+      intent.anchor.set(0.5);
+      intent.position.set(x, 7);
+      this.turnPanel.addChild(chip, name, intent);
+    });
   }
 
   private buildDecisionPanel(): void {
@@ -335,7 +422,54 @@ export class BattleScene extends Scene {
     if (!pending) return;
     const option = pending.event.options.find((candidate) => candidate.slot === slot);
     if (!option?.available) return;
-    this.choices.push({ uid: pending.event.uid, slot });
+    if (option.targetUids.length > 1) {
+      this.showTargetSelection(slot, option.targetUids);
+      return;
+    }
+    this.commitChoice(slot, option.targetUids[0]);
+  }
+
+  private showTargetSelection(slot: BattleAbilitySlot, targetUids: readonly string[]): void {
+    this.clearTargetSelection();
+    this.decisionTitle.text = 'CHOOSE A TARGET  ·  TAP A HIGHLIGHTED CARD';
+    for (const uid of targetUids) {
+      const view = this.views.get(uid);
+      if (!view?.alive) continue;
+      const overlay = new Container();
+      const color = view.side === 'enemy' ? Palette.danger : Palette.success;
+      const ring = new Graphics()
+        .roundRect(-76, -104, 152, 208, 18)
+        .fill({ color, alpha: 0.045 })
+        .stroke({ color, width: 5, alpha: 0.95 });
+      const label = new Text({ text: 'TARGET', style: Type.tiny() });
+      label.style.fill = color;
+      label.anchor.set(0.5);
+      label.position.set(0, -116);
+      overlay.addChild(ring, label);
+      overlay.position.copyFrom(view.card.position);
+      overlay.rotation = view.card.rotation;
+      overlay.scale.copyFrom(view.card.scale);
+      overlay.eventMode = 'static';
+      overlay.cursor = 'pointer';
+      overlay.on('pointertap', () => this.commitChoice(slot, uid));
+      this.targetOverlays.push(overlay);
+      this.cardLayer.addChild(overlay);
+    }
+  }
+
+  private clearTargetSelection(): void {
+    for (const overlay of this.targetOverlays) {
+      if (overlay.parent) overlay.parent.removeChild(overlay);
+      overlay.destroy({ children: true });
+    }
+    this.targetOverlays = [];
+  }
+
+  private commitChoice(slot: BattleAbilitySlot, targetUid?: string): void {
+    const pending = this.pendingDecision;
+    if (!pending) return;
+    this.clearTargetSelection();
+    this.choices.push({ uid: pending.event.uid, slot, ...(targetUid ? { targetUid } : {}) });
     this.result = this.simulateCurrentBattle();
     this.eventIndex = pending.eventIndex;
     this.pendingDecision = null;
@@ -383,6 +517,13 @@ export class BattleScene extends Scene {
   }
 
   private showUltimateCallout(view: UnitView, text: string, color: number): void {
+    // Only ever one callout on screen. Several ultimates can resolve within a
+    // few frames, and without this they stack into an unreadable pile.
+    if (this.ultimateCallout) {
+      this.removeChild(this.ultimateCallout);
+      this.ultimateCallout.destroy({ children: true });
+      this.ultimateCallout = null;
+    }
     const accent = mix(color, getFranchise(view.def.franchise).color, 0.35);
     const wrap = new Container();
     const bg = new Graphics()
@@ -416,6 +557,7 @@ export class BattleScene extends Scene {
     wrap.alpha = 0;
     wrap.scale.set(0.72);
     wrap.eventMode = 'none';
+    this.ultimateCallout = wrap;
     this.addChild(wrap);
     Tweens.to(wrap, { alpha: 1 }, { duration: 0.12 });
     Tweens.to(wrap.scale, { x: 1, y: 1 }, { duration: 0.24, ease: Easing.backOut });
@@ -423,6 +565,7 @@ export class BattleScene extends Scene {
       duration: 0.28,
       delay: 1.05,
       onComplete: () => {
+        if (this.ultimateCallout === wrap) this.ultimateCallout = null;
         this.removeChild(wrap);
         wrap.destroy({ children: true });
       },
@@ -533,6 +676,26 @@ export class BattleScene extends Scene {
       case 'choice':
         this.showDecision(e);
         break;
+      case 'bossMechanic': {
+        const view = this.views.get(e.uid);
+        if (!view) break;
+        this.showBanner(e.name.toUpperCase(), e.color, view, 'BOSS MECHANIC');
+        this.fx.flash(e.color, 0.12);
+        this.game.shake(6, 0.34);
+        break;
+      }
+      case 'bossPhase': {
+        const view = this.views.get(e.uid);
+        if (!view) break;
+        this.showBanner(`PHASE ${e.phase} · ${e.name.toUpperCase()}`, e.color, view, e.effect.toUpperCase());
+        view.card.playTransform();
+        this.fx.flash(e.color, 0.24);
+        this.fx.focusPulse(view.card.x, view.card.y, e.color);
+        this.fx.burst(view.card.x, view.card.y, { color: e.color, count: 42, speed: 420, size: 0.55 });
+        this.game.shake(9, 0.5);
+        this.game.sfx.transform();
+        break;
+      }
       case 'act': {
         const view = this.views.get(e.uid);
         if (!view) break;
@@ -543,7 +706,7 @@ export class BattleScene extends Scene {
         if (e.slot === 'charge') {
           view.card.playShield();
           this.fx.focusPulse(view.card.x, view.card.y, Palette.energy);
-          this.fx.floatText(view.card.x, view.card.y - 55, `+${Balance.battle.energyPerCharge} ENERGY`, { color: Palette.energy });
+          this.fx.floatText(view.card.x, view.card.y - 88, `+${Balance.battle.energyPerCharge} ENERGY`, { color: Palette.energy, minor: true });
           this.log(`${view.name} skipped the turn and charged energy`, Palette.energy, 'action');
           break;
         }
@@ -661,8 +824,11 @@ export class BattleScene extends Scene {
         const target = this.views.get(e.target);
         if (!target) break;
         const sign = e.amount >= 0 ? '+' : '';
-        this.fx.floatText(target.card.x, target.card.y - 30, `${sign}${Math.round(e.amount * 100)}% ${e.stat.toUpperCase()}`, {
+        // Above the portrait — at -30 this printed straight over the name band.
+        // Marked minor: buff chatter must not shout as loudly as damage.
+        this.fx.floatText(target.card.x, target.card.y - 88, `${sign}${Math.round(e.amount * 100)}% ${e.stat.toUpperCase()}`, {
           color: e.amount >= 0 ? Palette.success : Palette.danger,
+          minor: true,
         });
         break;
       }
@@ -693,6 +859,7 @@ export class BattleScene extends Scene {
         break;
       }
       case 'tick': {
+        this.renderTurnOrder(e.turnOrder, e.units);
         for (const snap of e.units) {
           const view = this.views.get(snap.uid);
           if (!view || !view.alive) continue;
@@ -734,11 +901,31 @@ export class BattleScene extends Scene {
       const playerUnits = this.result.units.filter((u) => u.side === 'player');
       applyBattleRecords(this.game.meta.records, playerUnits, (id) => getCharacter(id).name);
       this.game.meta.bestFloor = Math.max(this.game.meta.bestFloor, run.floor);
+      const career = this.game.meta.career;
+      const battleKills = playerUnits.reduce((sum, unit) => sum + unit.kills, 0);
+      this.game.meta.totalKills += battleKills;
+      career.battlesPlayed++;
+      career.ultimatesUsed += this.result.events.filter((event) =>
+        event.kind === 'act' && event.slot === 'ult' && event.uid.startsWith('p')).length;
+      for (const unit of playerUnits) {
+        career.legendDeployments[unit.defId] = (career.legendDeployments[unit.defId] ?? 0) + 1;
+      }
       if (won) {
+        career.battlesWon++;
+        career.currentWinStreak++;
+        career.longestWinStreak = Math.max(career.longestWinStreak, career.currentWinStreak);
+        career.totalGoldEarned += run.lastBattleCoins;
+        if (run.currentFloor().isBoss) {
+          const defeated = new Set(this.game.meta.defeatedBossIds);
+          run.currentFloor().enemies.filter((enemy) => enemy.boss).forEach((enemy) => defeated.add(enemy.defId));
+          this.game.meta.defeatedBossIds = [...defeated];
+          career.bossesDefeated++;
+        }
         this.game.saveMeta();
         this.game.goto(new RewardScene(this.game));
       } else {
-        this.game.meta.totalKills += run.kills;
+        career.battlesLost++;
+        career.currentWinStreak = 0;
         this.game.saveMeta();
         this.game.goto(new SummaryScene(this.game));
       }

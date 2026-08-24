@@ -8,8 +8,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "check": "tsc --noEmit && vitest run",
-    "assets": "node scripts/convert-assets.mjs"
+    "check": "tsc --noEmit && vitest run && npm run content",
+    "assets": "node scripts/convert-assets.mjs",
+    "balance": "vite-node scripts/balance-report.ts",
+    "content": "vite-node scripts/validate-content.ts"
   },
   "dependencies": {
     "pixi.js": "^8.6.6"

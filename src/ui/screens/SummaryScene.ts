@@ -66,6 +66,7 @@ export class SummaryScene extends Scene {
       `Coins earned          ${run.goldEarned.toLocaleString('en-US')}`,
       `Enemies defeated      ${run.kills}`,
       `Legends recruited     ${run.roster.length}`,
+      `Relics collected      ${run.relicIds.length}`,
     ];
     lines.forEach((text, i) => {
       const line = new Text({ text, style: Type.body() });

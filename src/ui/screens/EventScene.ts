@@ -1,22 +1,26 @@
-/**
- * A non-combat room (treasure / campfire / merchant). Resolves the floor's
- * reward, shows what happened, then continues the climb.
- */
+/** Interactive treasure, rest, and merchant rooms with explicit risk/reward choices. */
 
-import { Graphics, Sprite, Text } from 'pixi.js';
+import { Container, Graphics, Text } from 'pixi.js';
 import { Scene } from '../../app/Scene';
 import type { Game } from '../../app/Game';
-import { Tweens, Easing } from '../../core/Tween';
+import type { EventChoice, EventResult } from '../../sim/run';
 import { getShopItem } from '../../data/items';
 import { Button } from '../components/Button';
 import { buildItemIcon } from '../components/ItemIcon';
 import { FxLayer } from '../fx/effects';
-import { glowTexture } from '../fx/textures';
 import { H, mix, Palette, Type, W } from '../theme';
 import { advanceToNextFloor } from './floorRouter';
 
+const ROOM_THEME = {
+  treasure: { icon: '💎', title: 'TREASURE VAULT', color: 0x9b72ff },
+  rest: { icon: '🔥', title: 'CAMPFIRE', color: Palette.gold },
+  merchant: { icon: '🛒', title: 'WANDERING MERCHANT', color: Palette.success },
+} as const;
+
 export class EventScene extends Scene {
   private fx = new FxLayer();
+  private choiceLayer = new Container();
+  private resolved = false;
 
   constructor(game: Game) {
     super(game);
@@ -29,65 +33,117 @@ export class EventScene extends Scene {
   }
 
   onEnter(): void {
-    const run = this.run;
-    const result = run.resolveEventFloor();
-    const accent = result.icon === '💎' ? Palette.blue : result.icon === '🔥' ? Palette.gold : Palette.success;
-
+    const kind = this.run.currentFloor().kind;
+    if (kind === 'battle' || kind === 'elite') throw new Error('EventScene cannot open for combat');
+    const theme = ROOM_THEME[kind];
     const backdrop = new Graphics().rect(0, 0, W, H).fill(Palette.bg);
-    const wash = new Sprite(glowTexture());
-    wash.anchor.set(0.5);
-    wash.tint = accent;
-    wash.alpha = 0.24;
-    wash.width = W * 1.1;
-    wash.height = H * 1.2;
-    wash.position.set(W / 2, H / 2);
-    this.addChild(backdrop, wash);
+    const aura = new Graphics().circle(W / 2, 340, 420).fill({ color: theme.color, alpha: 0.08 });
+    this.addChild(backdrop, aura);
 
-    const floorLabel = new Text({ text: `FLOOR ${run.floor}`, style: Type.tiny() });
-    floorLabel.style.fill = Palette.textDim;
-    floorLabel.anchor.set(0.5);
-    floorLabel.position.set(W / 2, 96);
-    this.addChild(floorLabel);
+    const floor = new Text({ text: `FLOOR ${this.run.floor}`, style: Type.tiny() });
+    floor.style.fill = Palette.textDim;
+    floor.anchor.set(0.5);
+    floor.position.set(W / 2, 46);
+    const title = new Text({ text: `${theme.icon}  ${theme.title}`, style: Type.banner(theme.color) });
+    title.anchor.set(0.5);
+    title.position.set(W / 2, 92);
+    const subtitle = new Text({ text: 'CHOOSE ONE — EVERY OPTION CHANGES THE RUN', style: Type.h3() });
+    subtitle.style.fill = Palette.textDim;
+    subtitle.anchor.set(0.5);
+    subtitle.position.set(W / 2, 140);
+    this.addChild(floor, title, subtitle, this.choiceLayer);
+    this.buildChoices(this.run.eventChoices(), theme.color);
+    this.addChild(this.fx);
+  }
 
+  private buildChoices(choices: readonly EventChoice[], accent: number): void {
+    const cardW = 330;
+    const gap = 30;
+    const total = choices.length * cardW + (choices.length - 1) * gap;
+    choices.forEach((choice, index) => {
+      const x = (W - total) / 2 + index * (cardW + gap);
+      const card = new Container();
+      card.position.set(x, 190);
+      card.alpha = choice.available ? 1 : 0.48;
+      const plate = new Graphics()
+        .roundRect(0, 0, cardW, 350, 20)
+        .fill({ color: Palette.panel, alpha: 0.96 })
+        .stroke({ color: choice.available ? accent : Palette.border, width: 2.5 });
+      const icon = new Text({ text: choice.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 64 } });
+      icon.anchor.set(0.5);
+      icon.position.set(cardW / 2, 68);
+      const name = new Text({ text: choice.title.toUpperCase(), style: Type.h2() });
+      name.style.fill = choice.available ? accent : Palette.textFaint;
+      name.anchor.set(0.5);
+      name.position.set(cardW / 2, 132);
+      if (name.width > cardW - 32) name.scale.set((cardW - 32) / name.width);
+      const desc = new Text({ text: choice.desc, style: Type.body() });
+      desc.style.wordWrap = true;
+      desc.style.wordWrapWidth = cardW - 48;
+      desc.style.align = 'center';
+      desc.anchor.set(0.5, 0);
+      desc.position.set(cardW / 2, 172);
+      const button = new Button(choice.available ? 'TAKE THIS PATH' : 'NOT AVAILABLE', this.game.sfx, {
+        width: cardW - 48,
+        height: 50,
+        variant: 'primary',
+        onClick: () => this.resolve(choice.id, accent),
+      });
+      button.position.set(cardW / 2, 306);
+      button.setEnabled(choice.available);
+      card.addChild(plate, icon, name, desc, button);
+      this.choiceLayer.addChild(card);
+    });
+    const wallet = new Text({ text: `🪙 ${this.run.gold.toLocaleString('en-US')}     🎟 ${this.run.spins}`, style: Type.h3() });
+    wallet.anchor.set(0.5);
+    wallet.position.set(W / 2, H - 72);
+    this.choiceLayer.addChild(wallet);
+  }
+
+  private resolve(choiceId: string, accent: number): void {
+    if (this.resolved) return;
+    let result: EventResult;
+    try {
+      result = this.run.resolveEventChoice(choiceId);
+    } catch (error) {
+      console.error(`Failed to resolve event choice ${choiceId}`, error);
+      this.game.toast('That choice is no longer available.', Palette.danger);
+      return;
+    }
+    this.resolved = true;
+    this.game.saveRun();
+    this.choiceLayer.visible = false;
+    this.showResult(result, accent);
+  }
+
+  private showResult(result: EventResult, accent: number): void {
     const panel = new Graphics()
-      .roundRect(W / 2 - 380, 130, 760, 360, 22)
-      .fill({ color: Palette.panel, alpha: 0.95 })
+      .roundRect(W / 2 - 390, 180, 780, 350, 24)
+      .fill({ color: Palette.panel, alpha: 0.98 })
       .stroke({ color: accent, width: 3 });
-    this.addChild(panel);
-
-    const icon = new Text({ text: result.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 84 } });
+    const icon = new Text({ text: result.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 82 } });
     icon.anchor.set(0.5);
-    icon.position.set(W / 2, 218);
+    icon.position.set(W / 2, 250);
     const title = new Text({ text: result.title, style: Type.banner(accent) });
     title.anchor.set(0.5);
-    title.position.set(W / 2, 306);
-    if (title.width > 700) title.scale.set(700 / title.width);
+    title.position.set(W / 2, 330);
     const detail = new Text({ text: result.detail, style: Type.body() });
     detail.style.wordWrap = true;
-    detail.style.wordWrapWidth = 620;
+    detail.style.wordWrapWidth = 650;
     detail.style.align = 'center';
     detail.anchor.set(0.5, 0);
-    detail.position.set(W / 2, 350);
-    this.addChild(icon, title, detail);
-
-    // Show the actual artifact when a treasure room granted one.
+    detail.position.set(W / 2, 374);
+    this.addChild(panel, icon, title, detail);
     if (result.itemId) {
       const item = getShopItem(result.itemId);
-      const well = new Graphics()
-        .roundRect(W / 2 - 52, 404, 104, 68, 12)
-        .fill({ color: Palette.black, alpha: 0.45 })
-        .stroke({ color: mix(accent, Palette.black, 0.3), width: 1.5 });
-      const art = buildItemIcon(item, 56);
-      art.position.set(W / 2, 438);
+      const well = new Graphics().roundRect(W / 2 - 48, 438, 96, 70, 12)
+        .fill({ color: Palette.black, alpha: 0.55 })
+        .stroke({ color: mix(accent, Palette.white, 0.18), width: 2 });
+      const art = buildItemIcon(item, 58);
+      art.position.set(W / 2, 473);
       this.addChild(well, art);
     }
-
-    const wallet = new Text({ text: `🪙 ${run.gold.toLocaleString('en-US')}     🎟 ${run.spins}`, style: Type.h3() });
-    wallet.anchor.set(0.5);
-    wallet.position.set(W / 2, 528);
-    this.addChild(wallet);
-
-    const onward = new Button('CONTINUE THE CLIMB', this.game.sfx, {
+    const onward = new Button('CONTINUE TO ROUTE MAP', this.game.sfx, {
       width: 340,
       height: 56,
       variant: 'primary',
@@ -95,14 +151,8 @@ export class EventScene extends Scene {
     });
     onward.position.set(W / 2, H - 78);
     this.addChild(onward);
-
-    this.addChild(this.fx);
     this.game.sfx.coin();
-    this.fx.burst(W / 2, 218, { color: accent, count: 26, speed: 300, size: 0.45 });
-    icon.scale.set(0.4);
-    Tweens.to(icon.scale, { x: 1, y: 1 }, { duration: 0.45, ease: Easing.backOut });
-    title.alpha = 0;
-    Tweens.to(title, { alpha: 1 }, { duration: 0.35, delay: 0.12 });
+    this.fx.burst(W / 2, 250, { color: accent, count: 30, speed: 320, size: 0.46 });
   }
 
   override update(dt: number): void {

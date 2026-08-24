@@ -5,6 +5,7 @@ import { Balance } from '../data/balance';
 import { CHARACTERS } from '../data/characters';
 import { characterPowerScore } from '../data/characterRules';
 import { AFFIXES } from '../data/affixes';
+import { BOSS_MECHANICS } from '../data/bosses';
 import { getFranchise } from '../data/franchises';
 import type { CharacterDef } from '../data/types';
 import type { CombatantSpec } from './battle';
@@ -35,6 +36,22 @@ const KIND_WEIGHTS: [FloorKind, number][] = [
   ['rest', 10],
   ['merchant', 8],
 ];
+
+/** Deterministic route offers for a floor the player is about to enter. */
+export function routeChoices(floor: number, seed: number, previousKind: FloorKind): FloorKind[] {
+  if (floor <= 1 || isBossFloor(floor)) return ['battle'];
+  const rng = new Rng((seed ^ (floor * 0x27d4eb2d) ^ 0xa5a5a5a5) >>> 0);
+  const choices: FloorKind[] = ['battle'];
+  const candidates = KIND_WEIGHTS
+    .filter(([kind]) => kind !== 'battle' && (isCombatFloor(previousKind) || isCombatFloor(kind)))
+    .map(([kind, weight]) => ({ kind, weight }));
+  while (choices.length < 3 && candidates.length > 0) {
+    const picked = rng.weighted(candidates, (candidate) => candidate.weight);
+    choices.push(picked.kind);
+    candidates.splice(candidates.indexOf(picked), 1);
+  }
+  return choices;
+}
 
 /**
  * A floor's room type — a pure function of (floor, seed) so re-entering a floor
@@ -101,7 +118,10 @@ export function generateFloor(floor: number, rng: Rng, kind: FloorKind = 'battle
 
   let bossDef: CharacterDef | null = null;
   if (boss) {
-    bossDef = rng.pick(CHARACTERS.filter((c) => c.rarity === 'legendary' || c.rarity === 'supreme' || c.rarity === 'godlike'));
+    const guardianIndex = Math.max(0, Math.floor(floor / Balance.tower.bossEvery) - 1) % BOSS_MECHANICS.length;
+    const guardianId = BOSS_MECHANICS[guardianIndex]?.characterId;
+    bossDef = CHARACTERS.find((character) => character.id === guardianId)
+      ?? rng.pick(CHARACTERS.filter((c) => c.rarity === 'legendary' || c.rarity === 'supreme' || c.rarity === 'godlike'));
     picked.push(bossDef);
     spent += Balance.rarity.cost[bossDef.rarity];
   }

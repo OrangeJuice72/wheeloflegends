@@ -1262,7 +1262,7 @@ const CROSS_UNIVERSE_EXPANSION: CharacterDef[] = [
     },
     "abilities": [
       {
-        "id": "ge-basic",
+        "id": "genie-basic",
         "name": "Cosmic Snap",
         "slot": "basic",
         "effects": [
@@ -1276,7 +1276,7 @@ const CROSS_UNIVERSE_EXPANSION: CharacterDef[] = [
         "color": 5691903
       },
       {
-        "id": "ge-skill",
+        "id": "genie-skill",
         "name": "Three Wishes",
         "slot": "skill",
         "cooldown": 8,
@@ -1297,7 +1297,7 @@ const CROSS_UNIVERSE_EXPANSION: CharacterDef[] = [
         "color": 9169151
       },
       {
-        "id": "ge-ult",
+        "id": "genie-ult",
         "name": "Phenomenal Cosmic Power",
         "slot": "ult",
         "effects": [

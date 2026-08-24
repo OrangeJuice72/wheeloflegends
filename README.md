@@ -14,6 +14,8 @@ replaced with original IP before any public release (tracked as an M5 ship-block
 npm install
 npm run dev      # play at http://localhost:5173
 npm run check    # typecheck + simulation test suite (the merge gate)
+npm run content  # validate new roster/item/arena art and definitions
+npm run balance  # full-team matchup and rarity-budget audit
 npm run build    # production build
 ```
 
@@ -45,12 +47,20 @@ upgrade any character to painted art, drop a PNG named after its id into
 replaces the emblem on every card surface. See
 [src/assets/portraits/README.md](src/assets/portraits/README.md).
 
-## Current state — Milestone 1 (vertical slice) ✅
+## Current state
 
-Full loop: menu → wheel recruiting with rarity reveal ceremonies → formation
-with team-cost cap and live synergies → auto-battle with FX/SFX/log and speed
-controls → reward drafts → persistent-HP climbing → defeat summary → best-floor
-meta persistence. 21 characters, 10 synergies, boss floors every 5.
+The complete run loop now includes wheel or draft recruiting, formation bonuses,
+equipment and a persistent bag, manual targeted commands or configurable auto-AI,
+turn-order and enemy-intent previews, animated battles, expanded reward drafts,
+branching tower routes, choice-based rest/treasure/merchant events, and distinct
+multi-phase Godzilla, Bowser, and Mewtwo boss mechanics. Named run relics now
+enable formation, rarity, energy, lifesteal, recovery, and economy builds. The
+Legend Codex tracks collection discoveries while the Record Hall stores career
+statistics. The roster currently contains 155 characters and can keep growing
+through the data-driven asset folders.
 
-Next: M2 — slot-machine recruit mode, floor-type variety (elites, events,
-merchants), relic build-arounds, equipment. See the roadmap.
+Gameplay art is staged after the menu so the start screen appears quickly. Run
+`npm run balance -- --samples=8 --mode=5v5` after roster or stat changes to screen
+full-team mirrored matchups, rarity budgets, duplicate IDs, and win-rate outliers
+before playtesting. `npm run content` reports missing definitions or art, invalid
+moves and weaknesses, duplicate IDs, arena dimensions, and unmatched new assets.

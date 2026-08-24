@@ -14,12 +14,16 @@ export interface BattleChoiceOption {
   energyCost: number;
   available: boolean;
   cooldown: number;
+  /** Living units that may be explicitly selected for this action. */
+  targetUids: string[];
 }
 
 export interface UnitSnapshot {
   uid: string;
   hp: number;
   energy: number;
+  meter: number;
+  intent?: string;
 }
 
 export type BattleEvent =
@@ -30,6 +34,8 @@ export type BattleEvent =
   | { t: number; kind: 'itemProc'; uid: string; itemName: string; effect: string }
   | { t: number; kind: 'act'; uid: string; ability: string; slot: 'basic' | 'skill' | 'ult' | 'charge' | 'item'; fx: AbilityFx; color: number }
   | { t: number; kind: 'choice'; uid: string; energy: number; options: BattleChoiceOption[] }
+  | { t: number; kind: 'bossMechanic'; uid: string; name: string; effect: string; color: number }
+  | { t: number; kind: 'bossPhase'; uid: string; phase: number; name: string; effect: string; color: number }
   | { t: number; kind: 'damage'; source: string; target: string; amount: number; crit: boolean; weakness: boolean; hpAfter: number; shielded: boolean }
   | { t: number; kind: 'dodge'; target: string }
   | { t: number; kind: 'heal'; source: string; target: string; amount: number; hpAfter: number }
@@ -38,7 +44,7 @@ export type BattleEvent =
   | { t: number; kind: 'buff'; source: string; target: string; stat: BuffStat; amount: number; duration: number }
   | { t: number; kind: 'transform'; uid: string; name: string }
   | { t: number; kind: 'death'; uid: string }
-  | { t: number; kind: 'tick'; units: UnitSnapshot[] }
+  | { t: number; kind: 'tick'; units: UnitSnapshot[]; turnOrder: string[] }
   | { t: number; kind: 'end'; winner: Side; duration: number };
 
 export interface UnitResultStats {

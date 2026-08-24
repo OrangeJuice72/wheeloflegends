@@ -16,6 +16,8 @@ import { FeatheredBackground } from '../fx/FeatheredBackground';
 import { SettingsModal } from '../components/SettingsModal';
 import { RecordsModal } from '../components/RecordsModal';
 import { RunSetupModal, type RunConfig } from '../components/RunSetupModal';
+import { RouteScene } from './RouteScene';
+import { LegendCodexModal } from '../components/LegendCodexModal';
 
 const ART_OVERSCAN = 1.01;
 const ART_WIDTH = 1368;
@@ -152,6 +154,7 @@ export class MenuScene extends Scene {
       const entries: [string, () => void][] = [
         ['NEW RUN', () => this.openSetup()],
         ['RECORD HALL', () => this.openRecords()],
+        ['LEGEND CODEX', () => { void this.openCodex(); }],
         ['SETTINGS', () => this.openSettings()],
       ];
       // A climb in progress earns a CONTINUE at the top of the stack.
@@ -187,8 +190,9 @@ export class MenuScene extends Scene {
     }
     // Keep the stack centred on the art's button bay whatever the count, so the
     // hand-tuned three-button layout is reproduced exactly and a fourth fits.
-    const centerY = (BUTTON_Y[0]! + BUTTON_Y[BUTTON_Y.length - 1]!) / 2;
-    const spacing = BUTTON_Y.length > 1 ? BUTTON_Y[1]! - BUTTON_Y[0]! : 70;
+    const hasContinue = this.buttons.length >= 5;
+    const centerY = hasContinue ? 200 : (BUTTON_Y[0]! + BUTTON_Y[BUTTON_Y.length - 1]!) / 2;
+    const spacing = hasContinue ? 60 : (BUTTON_Y.length > 1 ? BUTTON_Y[1]! - BUTTON_Y[0]! : 70);
     this.buttons.forEach((button, index) => {
       button.scale.set(1);
       button.position.set(0, centerY + (index - (this.buttons.length - 1) / 2) * spacing);
@@ -221,6 +225,15 @@ export class MenuScene extends Scene {
     this.addChild(modal);
   }
 
+  private async openCodex(): Promise<void> {
+    await this.game.prepareGameplayAssets();
+    const modal = new LegendCodexModal(this.game, () => {
+      this.removeChild(modal);
+      modal.destroy({ children: true });
+    });
+    this.addChild(modal);
+  }
+
   private openSettings(): void {
     const modal = new SettingsModal(this.game, () => {
       this.removeChild(modal);
@@ -229,7 +242,8 @@ export class MenuScene extends Scene {
     this.addChild(modal);
   }
 
-  private startRun(config: RunConfig = { mode: 'tower', draft: false, modifiers: [] }): void {
+  private async startRun(config: RunConfig = { mode: 'tower', draft: false, modifiers: [] }): Promise<void> {
+    await this.game.prepareGameplayAssets();
     this.game.beginRun(new RunState(randomSeed(), this.game.meta.difficulty, config.modifiers, {
       mode: config.mode,
       draft: config.draft,
@@ -241,17 +255,27 @@ export class MenuScene extends Scene {
   }
 
   /** Pick the saved climb back up exactly where it was left. */
-  private continueRun(): void {
+  private async continueRun(): Promise<void> {
     const save = loadRunState<RunSave>();
     const run = save ? RunState.fromSave(save) : null;
     if (!run) {
       this.game.toast('That saved run could not be loaded.', Palette.danger);
       return;
     }
+    await this.game.prepareGameplayAssets();
     this.game.beginRun(run);
+    if (!run.isConquest() && run.isEventFloor() && run.eventResolvedFloor === run.floor) {
+      run.advanceFloor();
+      this.game.goto(new RouteScene(this.game, () => enterCurrentFloor(this.game)));
+      return;
+    }
     if (!run.isConquest() && run.isEventFloor()) {
       // Saved standing in an unresolved event room — finish it first.
       enterCurrentFloor(this.game);
+      return;
+    }
+    if (!run.isConquest() && run.floor > 1 && run.selectedFloorKind === null) {
+      this.game.goto(new RouteScene(this.game, () => enterCurrentFloor(this.game)));
       return;
     }
     this.game.goto(run.isConquest() ? new ConquestMapScene(this.game) : new SlotScene(this.game));

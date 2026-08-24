@@ -12,8 +12,9 @@ import type { ItemBoosts, ItemTier, ShopItemDef } from '../data/items';
 import type { ModifierId } from '../data/modifiers';
 import type { CombatantSpec } from './battle';
 import type { BattleResult } from './events';
-import { floorKind, generateConquestNode, generateFloor, isCombatFloor, type FloorInfo } from './tower';
+import { floorKind, generateConquestNode, generateFloor, isCombatFloor, routeChoices, type FloorInfo, type FloorKind } from './tower';
 import type { Difficulty } from '../core/Save';
+import { getRelic, relicCombatBonuses, relicRunTotals, RELICS } from '../data/relics';
 
 /** Run structure. 'tower' is the endless climb; 'conquest' is a universe ladder. */
 export type GameMode = 'tower' | 'conquest';
@@ -72,6 +73,21 @@ export interface RewardChoice {
   apply: (run: RunState) => void | string | string[];
 }
 
+export interface EventChoice {
+  id: string;
+  title: string;
+  desc: string;
+  icon: string;
+  available: boolean;
+}
+
+export interface EventResult {
+  icon: string;
+  title: string;
+  detail: string;
+  itemId?: string;
+}
+
 /** A run frozen to plain JSON so a climb survives closing the tab. */
 export interface RunSave {
   v: 1;
@@ -90,6 +106,8 @@ export interface RunSave {
   team: (number | null)[];
   relicAtk: number;
   relicHp: number;
+  /** Named build-defining relics; optional for saves made before this system. */
+  relicIds?: string[];
   goldEarned: number;
   lastBattleCoins: number;
   kills: number;
@@ -97,6 +115,10 @@ export interface RunSave {
   teamCostCap: number;
   teamCostUpgrades: number;
   battlefieldId: string | null;
+  /** Player-selected room type for the current tower floor. */
+  selectedFloorKind?: FloorKind | null;
+  previousFloorKind?: FloorKind;
+  eventResolvedFloor?: number | null;
   /** Stream positions so resuming never replays the same draws. */
   rngState: number;
   battleRngState: number;
@@ -118,6 +140,7 @@ export class RunState {
   team: (number | null)[] = [null, null, null, null, null];
   relicAtk = 0;
   relicHp = 0;
+  relicIds: string[] = [];
   goldEarned = 0;
   lastBattleCoins = 0;
   kills = 0;
@@ -127,6 +150,9 @@ export class RunState {
   teamCostUpgrades = 0;
   /** Arena chosen by the pre-battle convergence rail. */
   battlefieldId: string | null = null;
+  selectedFloorKind: FloorKind | null = null;
+  previousFloorKind: FloorKind = 'battle';
+  eventResolvedFloor: number | null = null;
   difficulty: Difficulty;
 
   /** Active run modifiers (mutators). Empty for a standard climb. */
@@ -179,6 +205,7 @@ export class RunState {
       team: [...this.team],
       relicAtk: this.relicAtk,
       relicHp: this.relicHp,
+      relicIds: [...this.relicIds],
       goldEarned: this.goldEarned,
       lastBattleCoins: this.lastBattleCoins,
       kills: this.kills,
@@ -186,6 +213,9 @@ export class RunState {
       teamCostCap: this.teamCostCap,
       teamCostUpgrades: this.teamCostUpgrades,
       battlefieldId: this.battlefieldId,
+      selectedFloorKind: this.selectedFloorKind,
+      previousFloorKind: this.previousFloorKind,
+      eventResolvedFloor: this.eventResolvedFloor,
       rngState: this.rng.streamState,
       battleRngState: this.battleRng.streamState,
       lastBattle: this.lastBattle
@@ -217,6 +247,7 @@ export class RunState {
         : (save.team ?? [null, null, null, null, null]).map((slot) => (slot !== null && slot < run.roster.length ? slot : null));
       run.relicAtk = save.relicAtk;
       run.relicHp = save.relicHp;
+      run.relicIds = [...new Set(save.relicIds ?? [])].filter((id) => RELICS.some((relic) => relic.id === id));
       run.goldEarned = save.goldEarned;
       run.lastBattleCoins = save.lastBattleCoins;
       run.kills = save.kills;
@@ -224,6 +255,9 @@ export class RunState {
       run.teamCostCap = save.teamCostCap;
       run.teamCostUpgrades = save.teamCostUpgrades;
       run.battlefieldId = save.battlefieldId;
+      run.selectedFloorKind = save.selectedFloorKind ?? null;
+      run.previousFloorKind = save.previousFloorKind ?? 'battle';
+      run.eventResolvedFloor = save.eventResolvedFloor ?? null;
       run.rng.streamState = save.rngState;
       writable.battleRng.streamState = save.battleRngState;
       run.lastBattle = save.lastBattle ? { ...save.lastBattle, events: [] } : null;
@@ -394,7 +428,7 @@ export class RunState {
     const rng = new Rng((this.seed ^ (this.floor * 0x9e3779b9)) >>> 0);
     const generated = this.mode === 'conquest'
       ? generateConquestNode(this.floor, this.conquestTarget() ?? this.conquestOrder[this.conquestOrder.length - 1]!, this.conquestOrder.length, rng)
-      : generateFloor(this.floor, rng, floorKind(this.floor, this.seed));
+      : generateFloor(this.floor, rng, this.selectedFloorKind ?? floorKind(this.floor, this.seed));
     const difficultyScale = Balance.difficulty[this.difficulty];
     const levelBonus = Balance.difficultyLevelBonus[this.difficulty];
     return {
@@ -416,37 +450,114 @@ export class RunState {
     return !isCombatFloor(this.currentFloor().kind);
   }
 
+  routeChoicesForCurrentFloor(): FloorKind[] {
+    if (this.mode === 'conquest') return ['battle'];
+    return routeChoices(this.floor, this.seed, this.previousFloorKind);
+  }
+
+  chooseRoute(kind: FloorKind): boolean {
+    if (!this.routeChoicesForCurrentFloor().includes(kind)) return false;
+    this.selectedFloorKind = kind;
+    return true;
+  }
+
+  eventChoices(): EventChoice[] {
+    if (this.eventResolvedFloor === this.floor) return [];
+    const kind = this.currentFloor().kind;
+    if (kind === 'treasure') return [
+      { id: 'open-cache', title: 'Open the Cache', desc: 'Gain mystery equipment and a modest coin purse.', icon: '💎', available: true },
+      { id: 'sell-cache', title: 'Sell the Cache', desc: 'Take a large guaranteed coin payment instead.', icon: '🪙', available: true },
+      { id: 'break-seal', title: 'Break the Seal', desc: 'Gain two items, but every legend loses 20% current HP.', icon: '⚠️', available: true },
+    ];
+    if (kind === 'rest') return [
+      { id: 'full-rest', title: 'Rest Together', desc: 'Fully restore the entire roster.', icon: '🔥', available: true },
+      { id: 'focused-drill', title: 'Focused Drills', desc: 'A lowest-level legend gains a level and fully recovers.', icon: '📈', available: this.roster.some((entry) => entry.level < Balance.level.max) },
+      { id: 'battle-meditation', title: 'Battle Meditation', desc: 'Restore 35% HP and gain +5% run-wide attack.', icon: '✨', available: true },
+    ];
+    const gearCost = 120 + this.floor * 8;
+    const contractCost = 90 + this.floor * 5;
+    return [
+      { id: 'merchant-gear', title: `Mystery Gear · ${gearCost}`, desc: 'Buy one weighted equipment spin.', icon: '🧰', available: this.gold >= gearCost },
+      { id: 'merchant-contract', title: `Recruit Contract · ${contractCost}`, desc: 'Buy two free legend pulls.', icon: '🎟️', available: this.gold >= contractCost },
+      { id: 'merchant-tip', title: 'Trade Battlefield Intel', desc: 'Earn coins and learn from the wandering trader.', icon: '🗺️', available: true },
+    ];
+  }
+
   /**
    * Apply a non-combat room's reward and describe it for the event screen.
    * Safe to call once per floor — the caller advances afterwards.
    */
-  resolveEventFloor(): { icon: string; title: string; detail: string; itemId?: string } {
+  resolveEventChoice(choiceId: string): EventResult {
+    if (this.eventResolvedFloor === this.floor) throw new Error('This event room was already resolved');
+    const finish = (result: EventResult): EventResult => {
+      this.eventResolvedFloor = this.floor;
+      return result;
+    };
     const kind = this.currentFloor().kind;
     if (kind === 'treasure') {
+      if (choiceId === 'sell-cache') {
+        const coins = 260 + this.floor * Balance.rewards.goldPerFloor * 2;
+        this.gold += coins;
+        this.goldEarned += coins;
+        return finish({ icon: '🪙', title: 'CACHE SOLD', detail: `A collector pays ${coins.toLocaleString('en-US')} coins for the sealed cache.` });
+      }
       const item = this.rollMysteryItem();
       this.inventory.push(item.id);
+      if (choiceId === 'break-seal') {
+        const second = this.rollMysteryItem();
+        this.inventory.push(second.id);
+        for (const entry of this.roster) entry.hpPct = Math.max(0.05, entry.hpPct * 0.8);
+        return finish({ icon: '⚠️', title: 'THE SEAL BREAKS', detail: `${item.name} and ${second.name} join your Bag, but the released force wounds the roster.`, itemId: item.id });
+      }
       const coins = 60 + this.floor * Balance.rewards.goldPerFloor;
       this.gold += coins;
       this.goldEarned += coins;
-      return {
+      return finish({
         icon: '💎', title: 'TREASURE VAULT',
         detail: `You uncover ${item.name} and ${coins.toLocaleString('en-US')} coins.`,
         itemId: item.id,
-      };
+      });
     }
     if (kind === 'rest') {
+      if (choiceId === 'focused-drill') {
+        const eligible = this.roster.filter((entry) => entry.level < Balance.level.max).sort((a, b) => a.level - b.level);
+        const trainee = eligible[0];
+        if (!trainee) throw new Error('No legend can train');
+        trainee.level++;
+        trainee.hpPct = 1;
+        return finish({ icon: '📈', title: 'FOCUSED DRILLS', detail: `${getCharacter(trainee.defId).name} reaches level ${trainee.level} and fully recovers.` });
+      }
+      if (choiceId === 'battle-meditation') {
+        for (const entry of this.roster) entry.hpPct = Math.min(1, entry.hpPct + 0.35);
+        this.relicAtk += 0.05;
+        return finish({ icon: '✨', title: 'BATTLE MEDITATION', detail: 'The roster restores 35% HP and gains +5% run-wide attack.' });
+      }
       for (const entry of this.roster) entry.hpPct = 1;
-      return { icon: '🔥', title: 'CAMPFIRE', detail: 'Your legends rest. The whole roster is fully restored.' };
+      return finish({ icon: '🔥', title: 'CAMPFIRE', detail: 'Your legends rest. The whole roster is fully restored.' });
     }
-    // merchant
+    const gearCost = 120 + this.floor * 8;
+    const contractCost = 90 + this.floor * 5;
+    if (choiceId === 'merchant-gear') {
+      if (this.gold < gearCost) throw new Error('Not enough coins for gear');
+      this.gold -= gearCost;
+      const item = this.rollMysteryItem();
+      this.inventory.push(item.id);
+      return finish({ icon: '🧰', title: 'GEAR PURCHASED', detail: `${item.name} was added to your Formation Bag.`, itemId: item.id });
+    }
+    if (choiceId === 'merchant-contract') {
+      if (this.gold < contractCost) throw new Error('Not enough coins for contract');
+      this.gold -= contractCost;
+      this.spins += 2;
+      return finish({ icon: '🎟️', title: 'CONTRACT SIGNED', detail: 'Two free legend pulls were added to your run.' });
+    }
     const coins = 150 + this.floor * Balance.rewards.goldPerFloor * 2;
     this.gold += coins;
     this.goldEarned += coins;
     this.spins += 1;
-    return {
+    return finish({
       icon: '🛒', title: 'WANDERING MERCHANT',
       detail: `A trader pays well for tower relics: ${coins.toLocaleString('en-US')} coins and a free pull.`,
-    };
+    });
   }
 
   /** Per-stat deltas from modifiers, applied on top of items and synergies. */
@@ -462,6 +573,12 @@ export class RunState {
       const idx = this.team[slot];
       if (idx === null || idx === undefined) continue;
       const entry = this.roster[idx]!;
+      const character = getCharacter(entry.defId);
+      const relics = relicCombatBonuses(this.relicIds, character, slot);
+      const combinedExtra: ItemBoosts = { ...(extraBoosts ?? {}) };
+      for (const [key, value] of Object.entries(relics.boosts) as Array<[keyof ItemBoosts, number]>) {
+        combinedExtra[key] = (combinedExtra[key] ?? 0) + value;
+      }
       // statScale multiplies both HP and ATK in the sim; fold both relic
       // types into it as an average so each purchase always matters.
       const relicScale = 1 + (this.relicAtk + this.relicHp) / 2;
@@ -473,9 +590,11 @@ export class RunState {
         statScale: relicScale,
         itemId: entry.heldItemId ?? undefined,
         itemBoosts: entry.heldItemId
-          ? effectiveItemBoosts(getShopItem(entry.heldItemId), getCharacter(entry.defId))
+          ? effectiveItemBoosts(getShopItem(entry.heldItemId), character)
           : undefined,
-        extraBoosts,
+        extraBoosts: Object.keys(combinedExtra).length > 0 ? combinedExtra : undefined,
+        startingEnergy: relics.startingEnergy,
+        lifesteal: relics.lifesteal,
       });
     }
     return specs;
@@ -484,6 +603,7 @@ export class RunState {
   /** Fold a finished battle back into the run. Returns true on victory. */
   applyBattleResult(result: BattleResult): boolean {
     this.lastBattle = result;
+    const relicTotals = relicRunTotals(this.relicIds);
     for (const u of result.units) {
       if (u.side !== 'player') continue;
       const slot = Number(u.uid.slice(1));
@@ -497,19 +617,29 @@ export class RunState {
       entry.hpPct = u.alive ? Math.max(0.05, u.hpPct) : revivePct;
       this.kills += u.kills;
     }
+    if (relicTotals.postBattleHeal > 0) {
+      for (const entry of this.roster) entry.hpPct = Math.min(1, entry.hpPct + relicTotals.postBattleHeal);
+    }
     if (result.winner === 'player') {
       const R = Balance.rewards;
       const playerUnits = result.units.filter((unit) => unit.side === 'player');
       const survivors = playerUnits.filter((unit) => unit.alive).length;
       const flawless = playerUnits.length > 0 && playerUnits.every((unit) => unit.alive && unit.hpPct >= 0.75);
       const baseReward = R.battleBase + this.floor * R.battlePerFloor + survivors * R.survivorBonus + (this.currentFloor().isBoss ? R.bossBonus : 0) + (flawless ? R.flawlessBonus : 0);
-      const reward = Math.round(baseReward * Balance.difficultyReward[this.difficulty]);
+      const reward = Math.round(baseReward * Balance.difficultyReward[this.difficulty] * (1 + relicTotals.goldBonus));
       this.lastBattleCoins = reward;
       this.gold += reward;
       this.goldEarned += reward;
         return true;
     }
     return false;
+  }
+
+  addRelic(id: string): boolean {
+    getRelic(id);
+    if (this.relicIds.includes(id)) return false;
+    this.relicIds.push(id);
+    return true;
   }
 
   /** Map a battle uid index (order within playerSpecs) back to roster index. */
@@ -524,7 +654,10 @@ export class RunState {
   }
 
   advanceFloor(): void {
+    this.previousFloorKind = this.currentFloor().kind;
     this.floor++;
+    this.selectedFloorKind = null;
+    this.eventResolvedFloor = null;
   }
 
   // -- store ---------------------------------------------------------------
@@ -631,7 +764,18 @@ export class RunState {
       { id: 'mystery-relic', title: 'Mystery Equipment', desc: 'Receive a weighted equipment spin, with every rarity possible.', icon: '\u{1F381}', tier: 'rare', category: 'gear', apply: (run) => { const item = run.rollMysteryItem(); run.inventory.push(item.id); return item.id; } },
       { id: 'gear-cache', title: 'Double Gear Cache', desc: 'Receive two mystery items for your Formation Bag.', icon: '\u{1F9F0}', tier: 'epic', category: 'gear', apply: (run) => { const first = run.rollMysteryItem(); const second = run.rollMysteryItem(); run.inventory.push(first.id, second.id); return [first.id, second.id]; } },
     ];
+    const unownedRelics = this.rng.shuffle(RELICS.filter((relic) => !this.relicIds.includes(relic.id)));
+    const relicChoices: RewardChoice[] = unownedRelics.slice(0, boss ? 2 : 1).map((relic) => ({
+      id: `run-relic-${relic.id}`,
+      title: relic.name,
+      desc: relic.description,
+      icon: relic.icon,
+      tier: relic.tier,
+      category: 'power',
+      apply: (run) => { run.addRelic(relic.id); },
+    }));
     const power: RewardChoice[] = [
+      ...relicChoices,
       { id: 'relic-atk', title: 'Relic of Fury', desc: `Your team gains +${Math.round(R.relicAtk * 100)}% run-wide attack power.`, icon: '\u2694\uFE0F', tier: 'rare', category: 'power', apply: (run) => { run.relicAtk += R.relicAtk; } },
       { id: 'relic-hp', title: 'Relic of Vitality', desc: `Your team gains +${Math.round(R.relicHp * 100)}% run-wide vitality.`, icon: '\u{1F48E}', tier: 'rare', category: 'power', apply: (run) => { run.relicHp += R.relicHp; } },
       { id: 'twin-relic', title: 'Balanced Relic', desc: 'Gain +4% run-wide attack and vitality.', icon: '\u2696\uFE0F', tier: 'epic', category: 'power', apply: (run) => { run.relicAtk += 0.04; run.relicHp += 0.04; } },
@@ -659,7 +803,16 @@ export class RunState {
       choices.push(pick);
       used.add(pick.id);
     };
-    for (const pool of categories) takeFrom(pool);
+    for (const pool of categories) {
+      // Every victory exposes at least one build-defining relic until the set
+      // is complete; the remaining slots still vary by economy/recovery/gear.
+      if (pool === power && relicChoices[0]) {
+        choices.push(relicChoices[0]);
+        used.add(relicChoices[0].id);
+      } else {
+        takeFrom(pool);
+      }
+    }
     const fillPool = [economy, power, gear, ...(suddenDeath ? [] : [recovery])].flat();
     while (choices.length < target && fillPool.some((choice) => !used.has(choice.id))) takeFrom(fillPool);
 

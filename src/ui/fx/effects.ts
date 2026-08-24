@@ -60,9 +60,54 @@ export class FxLayer extends Container {
     }
   }
 
-  floatText(x: number, y: number, text: string, opts: { color?: number; big?: boolean; sub?: string } = {}): void {
+  /**
+   * Positions of floaters spawned in the last moment, so a flurry of hits on
+   * one unit cascades upward instead of printing on top of itself.
+   */
+  private recentFloats: { x: number; y: number; at: number }[] = [];
+
+  /** Floaters stay inside this band: clear of the top HUD and the bottom panels. */
+  private static readonly FLOAT_CEILING = 132;
+  private static readonly FLOAT_FLOOR = 620;
+  private static readonly FLOAT_GAP = 26;
+
+  /**
+   * Find a free slot near (x, y) so a flurry of hits on one unit reads as a
+   * list instead of a smear. Scans outward — up first, then down — and stays
+   * inside the safe band, which matters for back-row cards whose natural
+   * spawn point already sits near the HUD.
+   */
+  private stackFreeY(x: number, y: number): number {
+    const now = performance.now();
+    this.recentFloats = this.recentFloats.filter((f) => now - f.at < 620);
+    const gap = FxLayer.FLOAT_GAP;
+    const taken = (candidate: number) =>
+      this.recentFloats.some((f) => Math.abs(f.x - x) < 96 && Math.abs(f.y - candidate) < gap);
+    const inBand = (candidate: number) => candidate >= FxLayer.FLOAT_CEILING && candidate <= FxLayer.FLOAT_FLOOR;
+
+    const start = Math.min(Math.max(y, FxLayer.FLOAT_CEILING), FxLayer.FLOAT_FLOOR);
+    let chosen = start;
+    if (taken(start)) {
+      // The band holds ~18 slots; search most of it before accepting an overlap.
+      for (let step = 1; step <= 14; step++) {
+        const up = start - step * gap;
+        const down = start + step * gap;
+        if (inBand(up) && !taken(up)) { chosen = up; break; }
+        if (inBand(down) && !taken(down)) { chosen = down; break; }
+      }
+    }
+    this.recentFloats.push({ x, y: chosen, at: now });
+    return chosen;
+  }
+
+  /**
+   * `minor` marks secondary chatter (buff/debuff ticks). It renders smaller,
+   * dimmer and clears faster so damage numbers stay the loudest thing on screen.
+   */
+  floatText(x: number, y: number, text: string, opts: { color?: number; big?: boolean; sub?: string; minor?: boolean } = {}): void {
     const wrap = new Container();
     const label = new Text({ text, style: Type.damage(opts.color ?? Palette.white, opts.big ?? false) });
+    if (opts.minor) label.style.fontSize = 15;
     label.anchor.set(0.5);
     wrap.addChild(label);
     if (opts.sub) {
@@ -72,13 +117,15 @@ export class FxLayer extends Container {
       sub.position.set(0, 22);
       wrap.addChild(sub);
     }
-    wrap.position.set(x + (Math.random() - 0.5) * 30, y);
+    if (opts.minor) wrap.alpha = 0.82;
+    const spawnY = this.stackFreeY(x, y);
+    wrap.position.set(x + (Math.random() - 0.5) * 30, spawnY);
     wrap.scale.set(0.3);
     this.addChild(wrap);
     Tweens.to(wrap.scale, { x: 1, y: 1 }, { duration: 0.18, ease: Easing.backOut });
-    Tweens.to(wrap, { y: y - 58, alpha: 0 }, {
-      duration: 1.0,
-      delay: 0.25,
+    Tweens.to(wrap, { y: spawnY - (opts.minor ? 36 : 58), alpha: 0 }, {
+      duration: opts.minor ? 0.6 : 1.0,
+      delay: opts.minor ? 0.1 : 0.25,
       ease: Easing.quadIn,
       onComplete: () => {
         this.removeChild(wrap);

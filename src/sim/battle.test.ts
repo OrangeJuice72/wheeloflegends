@@ -179,6 +179,20 @@ describe('manual battle decisions', () => {
     expect(JSON.stringify(resumed.events)).toBe(JSON.stringify(repeated.events));
   });
 
+  it('allows a player to select an explicit valid target', () => {
+    const enemies = [spec('bowser', 0), spec('shrek', 1)];
+    const first = simulateBattle([spec('pikachu', 0)], enemies, 940, { manual: true });
+    const choice = first.pendingChoice!;
+    const basic = choice.options.find((option) => option.slot === 'basic')!;
+    expect(basic.targetUids).toEqual(['e0', 'e1']);
+    const resumed = simulateBattle([spec('pikachu', 0)], enemies, 940, {
+      manual: true,
+      choices: [{ uid: choice.uid, slot: 'basic', targetUid: 'e1' }],
+    });
+    const hit = resumed.events.find((event) => event.kind === 'damage' && event.source === 'p0');
+    expect(hit?.kind === 'damage' && hit.target).toBe('e1');
+  });
+
   it('rejects a move that the character cannot afford', () => {
     const first = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 93, { manual: true });
     const choice = first.pendingChoice!;
@@ -188,6 +202,45 @@ describe('manual battle decisions', () => {
       manual: true,
       choices: [{ uid: choice.uid, slot: unavailable!.slot }],
     })).toThrow(/cannot use/);
+  });
+});
+
+describe('battle planning and guardians', () => {
+  it('publishes a live turn order and enemy intent', () => {
+    const result = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 951);
+    const tick = result.events.find((event) => event.kind === 'tick');
+    expect(tick?.kind === 'tick' && tick.turnOrder.length).toBeGreaterThan(0);
+    expect(tick?.kind === 'tick' && tick.units.find((unit) => unit.uid === 'e0')?.intent).toBeTruthy();
+  });
+
+  it('uses distinct balanced and aggressive auto policies', () => {
+    const balanced = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 952, { autoStrategy: 'balanced' });
+    const aggressive = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 952, { autoStrategy: 'aggressive' });
+    expect(balanced.events.find((event) => event.kind === 'act' && event.uid === 'p0')?.kind === 'act'
+      && (balanced.events.find((event) => event.kind === 'act' && event.uid === 'p0') as { slot: string }).slot).toBe('charge');
+    expect(aggressive.events.find((event) => event.kind === 'act' && event.uid === 'p0')?.kind === 'act'
+      && (aggressive.events.find((event) => event.kind === 'act' && event.uid === 'p0') as { slot: string }).slot).toBe('basic');
+  });
+
+  for (const guardian of ['godzilla', 'bowser', 'mewtwo'] as const) {
+    it(`${guardian} performs a unique boss mechanic`, () => {
+      const team = [spec('superman', 0), spec('godzilla', 1), spec('shrek', 2), spec('spongebob', 3), spec('captain-america', 4)];
+      const result = simulateBattle(team, [spec(guardian, 0, { boss: true })], 960);
+      expect(result.events.some((event) => event.kind === 'bossMechanic' && event.uid === 'e0')).toBe(true);
+      expect(result.events.some((event) => event.kind === 'bossPhase' && event.uid === 'e0')).toBe(true);
+    });
+  }
+});
+describe('run relic combat hooks', () => {
+  it('supports starting energy and team lifesteal', () => {
+    const result = simulateBattle(
+      [spec('pikachu', 0, { hpPct: 0.55, startingEnergy: 30, lifesteal: 0.2 })],
+      [spec('bowser', 0)],
+      970,
+    );
+    const firstTick = result.events.find((event) => event.kind === 'tick');
+    expect(firstTick?.kind === 'tick' && firstTick.units.find((unit) => unit.uid === 'p0')?.energy).toBeGreaterThanOrEqual(30);
+    expect(result.events.some((event) => event.kind === 'heal' && event.source === 'p0' && event.target === 'p0')).toBe(true);
   });
 });
 describe('weaknesses, charge, and equipment effects', () => {

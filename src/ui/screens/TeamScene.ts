@@ -11,6 +11,8 @@ import { Balance } from '../../data/balance';
 import { getCharacter } from '../../data/characters';
 import { getShopItem } from '../../data/items';
 import { getAffix } from '../../data/affixes';
+import { getBossMechanic } from '../../data/bosses';
+import { getRelic } from '../../data/relics';
 import { computeSynergies } from '../../sim/synergy';
 import { Button } from '../components/Button';
 import { Panel } from '../components/Panel';
@@ -128,8 +130,27 @@ export class TeamScene extends Scene {
       this.scoutCards.push(card);
     });
     // Warn about an elite's modifier — it must never be a hidden mechanic.
+    const bossSpec = floor.enemies.find((spec) => spec.boss);
+    const bossMechanic = bossSpec ? getBossMechanic(bossSpec.defId) : undefined;
     const eliteSpec = floor.enemies.find((spec) => spec.affix);
-    if (eliteSpec?.affix) {
+    if (bossMechanic) {
+      const warnBg = new Graphics()
+        .roundRect(10, 306, 230, 46, 8)
+        .fill({ color: Palette.black, alpha: 0.58 })
+        .stroke({ color: Palette.danger, width: 1.5 });
+      const warn = new Text({ text: `⚠ ${bossMechanic.name.toUpperCase()}`, style: Type.tiny() });
+      warn.style.fill = bossMechanic.color;
+      warn.position.set(20, 312);
+      const detail = new Text({
+        text: bossMechanic.phases.map((phase) => `${Math.round(phase.atHpPct * 100)}% ${phase.name}`).join('  ·  '),
+        style: Type.small(),
+      });
+      detail.style.fontSize = 9;
+      detail.style.fill = Palette.textDim;
+      detail.position.set(20, 329);
+      if (detail.width > 212) detail.scale.set(212 / detail.width);
+      scout.content.addChild(warnBg, warn, detail);
+    } else if (eliteSpec?.affix) {
       const affix = getAffix(eliteSpec.affix);
       const warnBg = new Graphics()
         .roundRect(10, 318, 230, 34, 8)
@@ -155,7 +176,7 @@ export class TeamScene extends Scene {
     scout.content.addChild(threat);
     this.addChild(scout);
     // Synergy and Bag panels share the right command column.
-    this.synergyPanel = new Panel(330, 250, 'Team Synergies');
+    this.synergyPanel = new Panel(330, 250, 'Synergies & Relics');
     this.synergyPanel.position.set(930, 100);
     this.addChild(this.synergyPanel);
 
@@ -314,7 +335,7 @@ export class TeamScene extends Scene {
       none.position.set(16, 16);
       this.synergyPanel.content.addChild(none);
     }
-    active.slice(0, 6).forEach((syn, i) => {
+    active.slice(0, 4).forEach((syn, i) => {
       const row = new Container();
       const icon = new Text({ text: syn.def.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 20 } });
       const name = new Text({ text: `${syn.def.name}  ${syn.count}/${syn.def.thresholds[syn.tierIndex]?.count}`, style: Type.h3() });
@@ -326,6 +347,23 @@ export class TeamScene extends Scene {
       row.addChild(icon, name, desc);
       this.synergyPanel.content.addChild(row);
     });
+
+    const relicY = active.length === 0 ? 94 : 184;
+    const divider = new Graphics().moveTo(16, relicY - 10).lineTo(300, relicY - 10)
+      .stroke({ color: Palette.borderLight, width: 1, alpha: 0.65 });
+    const relicTitle = new Text({ text: `RUN RELICS  ${run.relicIds.length}`, style: Type.tiny() });
+    relicTitle.style.fill = Palette.gold;
+    relicTitle.position.set(16, relicY);
+    const relicText = new Text({
+      text: run.relicIds.length > 0
+        ? run.relicIds.slice(0, 6).map((id) => `${getRelic(id).icon} ${getRelic(id).name}`).join('   ')
+        : 'Win battles to draft build-changing relics.',
+      style: Type.small(),
+    });
+    relicText.style.fill = run.relicIds.length > 0 ? Palette.text : Palette.textDim;
+    relicText.position.set(16, relicY + 20);
+    if (relicText.width > 292) relicText.scale.set(292 / relicText.width);
+    this.synergyPanel.content.addChild(divider, relicTitle, relicText);
 
     const cost = run.teamCost();
     this.costText.text = `TEAM COST  ${cost} / ${run.teamCostCap}     ·     ${run.teamSize()}/5`;

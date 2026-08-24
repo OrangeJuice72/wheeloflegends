@@ -11,6 +11,7 @@ import type { AbilityDef, CharacterDef, EffectDef, StatusKind, TargetMode } from
 import { effectiveItemBoosts, getShopItem, itemBattleSummary, itemExtraActions, itemGrantedAbility } from '../data/items';
 import type { ItemBoosts } from '../data/items';
 import { getAffix, type AffixId } from '../data/affixes';
+import { getBossMechanic } from '../data/bosses';
 import { combineBonuses, computeSynergies } from './synergy';
 import type { BattleEvent, BattleResult, Side, UnitResultStats } from './events';
 
@@ -26,6 +27,9 @@ export interface CombatantSpec {
   extraBoosts?: ItemBoosts;
   /** Elite modifier carried by this unit (elite rooms only). */
   affix?: AffixId;
+  /** Run relic effects that cannot be represented as ordinary stat boosts. */
+  startingEnergy?: number;
+  lifesteal?: number;
   boss?: boolean;
 }
 
@@ -34,13 +38,19 @@ export type BattleAbilitySlot = AbilityDef['slot'] | 'charge' | 'item';
 export interface BattleChoice {
   uid: string;
   slot: BattleAbilitySlot;
+  /** Optional explicit target for single-target actions. */
+  targetUid?: string;
 }
+
+export type AutoStrategy = 'balanced' | 'aggressive' | 'defensive' | 'conserve';
 
 export interface BattleSimulationOptions {
   /** Stop before each player action that does not yet have a supplied choice. */
   manual?: boolean;
   /** Chronological player decisions already made. Used to deterministically resume. */
   choices?: readonly BattleChoice[];
+  /** Player-side automatic decision policy. Enemies always use balanced AI. */
+  autoStrategy?: AutoStrategy;
 }
 interface StatusInst {
   kind: StatusKind;
@@ -61,6 +71,7 @@ interface Unit {
   side: Side;
   slot: number;
   boss: boolean;
+  bossPhaseIndex: number;
   maxHp: number;
   hp: number;
   baseAtk: number;
@@ -136,8 +147,9 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     side,
     slot: spec.slot,
     boss: spec.boss ?? false,
+    bossPhaseIndex: 0,
     affix: spec.affix,
-    affixLifesteal: affix?.lifesteal ?? 0,
+    affixLifesteal: (affix?.lifesteal ?? 0) + (spec.lifesteal ?? 0),
     maxHp,
     hp: Math.max(1, Math.round(maxHp * spec.hpPct)),
     baseAtk,
@@ -160,7 +172,7 @@ function makeUnit(spec: CombatantSpec, side: Side, index: number, synergyBonus: 
     rageStacks: 0,
     transformed: false,
     meter: 0,
-    energy: 0,
+    energy: Math.min(B.energyMax, Math.max(0, spec.startingEnergy ?? 0)),
     skillCd: 0,
     // A Shielded elite starts the fight already behind its barrier.
     shields: affix?.shieldMult ? [{ amount: Math.round(baseAtk * affix.shieldMult), timeLeft: Number.POSITIVE_INFINITY }] : [],
@@ -274,9 +286,28 @@ export function simulateBattle(
     }
   }
 
-  function targetsFor(actor: Unit, mode: TargetMode): Unit[] {
+  function validManualTargets(actor: Unit, mode: TargetMode): Unit[] {
+    const foes = aliveOf(foesOf(actor));
+    const allies = aliveOf(alliesOf(actor));
+    if (mode === 'ally-lowest') return allies;
+    if (mode === 'enemy-front') {
+      const taunters = foes.filter((target) => hasStatus(target, 'taunt'));
+      if (taunters.length > 0) return taunters;
+      const front = foes.filter((target) => target.slot < Balance.team.frontSlots);
+      return front.length > 0 ? front : foes;
+    }
+    if (mode === 'enemy-back') {
+      const back = foes.filter((target) => target.slot >= Balance.team.frontSlots);
+      return back.length > 0 ? back : foes;
+    }
+    if (mode === 'enemy-lowest' || mode === 'enemy-random') return foes;
+    return [];
+  }
+
+  function targetsFor(actor: Unit, mode: TargetMode, explicitTarget?: Unit): Unit[] {
     if (mode === 'enemy-all') return aliveOf(foesOf(actor));
     if (mode === 'ally-all') return aliveOf(alliesOf(actor));
+    if (explicitTarget && validManualTargets(actor, mode).includes(explicitTarget)) return [explicitTarget];
     const single = pickSingle(actor, mode);
     return single ? [single] : [];
   }
@@ -314,6 +345,7 @@ export function simulateBattle(
       emit({ t, kind: 'death', uid: target.uid });
     } else {
       checkTransform(target);
+      checkBossPhases(target);
     }
   }
 
@@ -339,14 +371,56 @@ export function simulateBattle(
     }
   }
 
+  function checkBossPhases(u: Unit): void {
+    if (!u.boss || !u.alive) return;
+    const mechanic = getBossMechanic(u.def.id);
+    if (!mechanic) return;
+    while (u.bossPhaseIndex < mechanic.phases.length) {
+      const phase = mechanic.phases[u.bossPhaseIndex]!;
+      if (u.hp / u.maxHp > phase.atHpPct) break;
+      u.bossPhaseIndex++;
+      emit({
+        t, kind: 'bossPhase', uid: u.uid, phase: u.bossPhaseIndex,
+        name: phase.name, effect: phase.short, color: phase.color,
+      });
+      if (phase.atk) {
+        u.buffs.push({ stat: 'atk', amount: phase.atk, timeLeft: Infinity });
+        emit({ t, kind: 'buff', source: u.uid, target: u.uid, stat: 'atk', amount: phase.atk, duration: B.timeLimit });
+      }
+      if (phase.spd) {
+        u.buffs.push({ stat: 'spd', amount: phase.spd, timeLeft: Infinity });
+        emit({ t, kind: 'buff', source: u.uid, target: u.uid, stat: 'spd', amount: phase.spd, duration: B.timeLimit });
+      }
+      if (phase.shieldMult) {
+        const amount = Math.round(atkOf(u) * phase.shieldMult);
+        u.shields.push({ amount, timeLeft: 8 });
+        emit({ t, kind: 'shield', source: u.uid, target: u.uid, amount });
+      }
+      if (phase.pulse && phase.pulseMult) {
+        const foes = aliveOf(foesOf(u));
+        const preferred = phase.pulse === 'all' ? foes : foes.filter((target) =>
+          phase.pulse === 'front'
+            ? target.slot < Balance.team.frontSlots
+            : target.slot >= Balance.team.frontSlots);
+        for (const target of preferred.length > 0 ? preferred : foes) {
+          applyDamage(u, target, atkOf(u) * phase.pulseMult, false);
+          if (phase.burn && target.alive) {
+            target.statuses.push({ kind: 'burn', timeLeft: 3, dps: atkOf(u) * 0.08, hps: 0 });
+            emit({ t, kind: 'status', source: u.uid, target: target.uid, status: 'burn', duration: 3 });
+          }
+        }
+      }
+    }
+  }
+
   // ── effect application ─────────────────────────────────────────────────
-  function applyEffects(actor: Unit, effects: readonly EffectDef[]): void {
+  function applyEffects(actor: Unit, effects: readonly EffectDef[], explicitTarget?: Unit): void {
     for (const eff of effects) {
       switch (eff.kind) {
         case 'damage': {
           const hits = eff.hits ?? 1;
           for (let h = 0; h < hits; h++) {
-            for (const target of targetsFor(actor, eff.target)) {
+            for (const target of targetsFor(actor, eff.target, explicitTarget)) {
               const variance = 1 + rng.float(-B.damageVariance, B.damageVariance);
               const reduction = B.defenseScale / (B.defenseScale + defOf(target));
               const execute = eff.executeBelow !== undefined && target.hp / target.maxHp < eff.executeBelow;
@@ -362,17 +436,17 @@ export function simulateBattle(
           break;
         }
         case 'heal':
-          for (const target of targetsFor(actor, eff.target)) applyHeal(actor, target, atkOf(actor) * eff.mult);
+          for (const target of targetsFor(actor, eff.target, explicitTarget)) applyHeal(actor, target, atkOf(actor) * eff.mult);
           break;
         case 'shield':
-          for (const target of targetsFor(actor, eff.target)) {
+          for (const target of targetsFor(actor, eff.target, explicitTarget)) {
             const amount = Math.round(atkOf(actor) * eff.mult);
             target.shields.push({ amount, timeLeft: eff.duration });
             emit({ t, kind: 'shield', source: actor.uid, target: target.uid, amount });
           }
           break;
         case 'status':
-          for (const target of targetsFor(actor, eff.target)) {
+          for (const target of targetsFor(actor, eff.target, explicitTarget)) {
             if (!target.alive) continue;
             const power = eff.power ?? 0;
             target.statuses.push({
@@ -385,13 +459,13 @@ export function simulateBattle(
           }
           break;
         case 'buff':
-          for (const target of targetsFor(actor, eff.target)) {
+          for (const target of targetsFor(actor, eff.target, explicitTarget)) {
             target.buffs.push({ stat: eff.stat, amount: eff.amount, timeLeft: eff.duration });
             emit({ t, kind: 'buff', source: actor.uid, target: target.uid, stat: eff.stat, amount: eff.amount, duration: eff.duration });
           }
           break;
         case 'debuff':
-          for (const target of targetsFor(actor, eff.target)) {
+          for (const target of targetsFor(actor, eff.target, explicitTarget)) {
             target.buffs.push({ stat: eff.stat, amount: -eff.amount, timeLeft: eff.duration });
             emit({ t, kind: 'buff', source: actor.uid, target: target.uid, stat: eff.stat, amount: -eff.amount, duration: eff.duration });
           }
@@ -419,6 +493,17 @@ export function simulateBattle(
     return slot !== 'skill' || u.skillCd <= 0;
   };
 
+  const abilityForSlot = (u: Unit, slot: BattleAbilitySlot): AbilityDef | undefined =>
+    slot === 'charge' ? undefined : slot === 'item' ? u.itemAbility : bySlot(u, slot);
+
+  const targetUidsFor = (u: Unit, ability: AbilityDef | undefined): string[] => {
+    if (!ability) return [];
+    const targetMode = ability.effects
+      .map((effect) => effect.target)
+      .find((mode) => mode !== 'self' && mode !== 'enemy-all' && mode !== 'ally-all');
+    return targetMode ? validManualTargets(u, targetMode).map((target) => target.uid) : [];
+  };
+
   function choiceOptions(u: Unit) {
     const slots: BattleAbilitySlot[] = ['basic', 'skill', 'ult', 'charge'];
     if (u.itemAbility) slots.push('item');
@@ -428,10 +513,33 @@ export function simulateBattle(
       energyCost: energyCost(slot),
       available: canUse(u, slot),
       cooldown: slot === 'skill' ? Math.ceil(u.skillCd * 10) / 10 : slot === 'item' ? Math.ceil(u.itemCd * 10) / 10 : 0,
+      targetUids: targetUidsFor(u, abilityForSlot(u, slot)),
     }));
   }
 
-  function automaticAbility(u: Unit): BattleAbilitySlot {
+  function automaticAbility(u: Unit, strategy: AutoStrategy = 'balanced'): BattleAbilitySlot {
+    const support = (slot: BattleAbilitySlot): boolean => {
+      const ability = abilityForSlot(u, slot);
+      return ability?.effects.some((effect) => effect.kind === 'heal' || effect.kind === 'shield' || effect.kind === 'buff' || (effect.kind === 'status' && effect.status === 'regen')) ?? false;
+    };
+    if (strategy === 'aggressive') {
+      if (canUse(u, 'ult')) return 'ult';
+      if (canUse(u, 'item')) return 'item';
+      if (canUse(u, 'skill')) return 'skill';
+      return 'basic';
+    }
+    if (strategy === 'defensive') {
+      if (canUse(u, 'ult') && support('ult')) return 'ult';
+      if (canUse(u, 'item') && support('item')) return 'item';
+      if (canUse(u, 'skill') && support('skill')) return 'skill';
+      if (u.hp / u.maxHp < 0.45 && u.energy < B.energyMax) return 'charge';
+    }
+    if (strategy === 'conserve') {
+      if (canUse(u, 'ult') && aliveOf(foesOf(u)).length <= 1) return 'ult';
+      if (canUse(u, 'item')) return 'item';
+      if (canUse(u, 'skill')) return 'skill';
+      return 'basic';
+    }
     if (canUse(u, 'ult')) return 'ult';
     if (canUse(u, 'item')) return 'item';
     if (canUse(u, 'skill')) return 'skill';
@@ -441,6 +549,7 @@ export function simulateBattle(
 
   function act(u: Unit): boolean {
     let slot: BattleAbilitySlot;
+    let explicitTarget: Unit | undefined;
     if (u.side === 'player') {
       const supplied = options.choices?.[choiceIndex];
       if (supplied) {
@@ -451,6 +560,11 @@ export function simulateBattle(
           throw new Error(`${u.def.name} cannot use ${supplied.slot} with ${Math.round(u.energy)} energy`);
         }
         slot = supplied.slot;
+        const option = choiceOptions(u).find((candidate) => candidate.slot === slot)!;
+        if (supplied.targetUid) {
+          if (!option.targetUids.includes(supplied.targetUid)) throw new Error(`${supplied.targetUid} is not a valid target for ${u.def.name}'s ${slot}`);
+          explicitTarget = all.find((candidate) => candidate.uid === supplied.targetUid);
+        }
         choiceIndex++;
       } else if (options.manual) {
         pendingChoice = {
@@ -463,7 +577,7 @@ export function simulateBattle(
         emit(pendingChoice);
         return false;
       } else {
-        slot = automaticAbility(u);
+        slot = automaticAbility(u, options.autoStrategy ?? 'balanced');
       }
     } else {
       slot = automaticAbility(u);
@@ -489,12 +603,12 @@ export function simulateBattle(
       u.energy = Math.min(B.energyMax, u.energy + B.energyPerBasic * u.energyGainMult);
     }
     emit({ t, kind: 'act', uid: u.uid, ability: ability.name, slot, fx: ability.fx, color: ability.color });
-    applyEffects(u, ability.effects);
+    applyEffects(u, ability.effects, explicitTarget);
     for (let bonus = 0; bonus < u.extraActions && aliveOf(foesOf(u)).length > 0; bonus++) {
       if (u.itemName && u.itemEffect) {
         emit({ t, kind: 'itemProc', uid: u.uid, itemName: u.itemName, effect: u.itemEffect });
       }
-      applyEffects(u, ability.effects);
+      applyEffects(u, ability.effects, explicitTarget);
     }
     return true;
   }
@@ -506,8 +620,32 @@ export function simulateBattle(
   }
 
   // ── main loop ──────────────────────────────────────────────────────────
-  const snapshot = () => emit({ t, kind: 'tick', units: all.map((u) => ({ uid: u.uid, hp: u.hp, energy: Math.round(u.energy) })) });
+  const snapshot = () => {
+    const living = all.filter((unit) => unit.alive);
+    const turnOrder = [...living]
+      .sort((a, b) => ((B.actionMeterMax - a.meter) / spdOf(a)) - ((B.actionMeterMax - b.meter) / spdOf(b)))
+      .slice(0, 6)
+      .map((unit) => unit.uid);
+    emit({
+      t,
+      kind: 'tick',
+      turnOrder,
+      units: all.map((unit) => ({
+        uid: unit.uid,
+        hp: unit.hp,
+        energy: Math.round(unit.energy),
+        meter: Math.round(unit.meter),
+        ...(unit.side === 'enemy' && unit.alive ? { intent: automaticAbility(unit) } : {}),
+      })),
+    });
+  };
   snapshot();
+
+  const bossTimers = new Map<string, number>();
+  for (const unit of enemy) {
+    const mechanic = unit.boss ? getBossMechanic(unit.def.id) : undefined;
+    if (mechanic) bossTimers.set(unit.uid, mechanic.firstAt);
+  }
 
   let statusAccum = 0;
   let snapshotAccum = 0;
@@ -563,6 +701,34 @@ export function simulateBattle(
           }
         }
       }
+    }
+
+    // Named guardians bend the rules on a readable, repeating cadence.
+    for (const boss of enemy) {
+      const mechanic = boss.boss && boss.alive ? getBossMechanic(boss.def.id) : undefined;
+      const due = bossTimers.get(boss.uid);
+      if (!mechanic || due === undefined || t + 1e-9 < due) continue;
+      emit({ t, kind: 'bossMechanic', uid: boss.uid, name: mechanic.name, effect: mechanic.short, color: mechanic.color });
+      if (mechanic.kind === 'psychic-barrier') {
+        const amount = Math.round(atkOf(boss) * 2.2);
+        boss.shields.push({ amount, timeLeft: 7 });
+        emit({ t, kind: 'shield', source: boss.uid, target: boss.uid, amount });
+      } else {
+        const wantsBack = mechanic.kind === 'backline-fallout';
+        const preferred = aliveOf(player).filter((target) => wantsBack
+          ? target.slot >= Balance.team.frontSlots
+          : target.slot < Balance.team.frontSlots);
+        const targets = preferred.length > 0 ? preferred : aliveOf(player);
+        for (const target of targets) {
+          applyDamage(boss, target, atkOf(boss) * 0.58, false);
+          if (target.alive) {
+            target.statuses.push({ kind: 'burn', timeLeft: 3, dps: atkOf(boss) * 0.08, hps: 0 });
+            emit({ t, kind: 'status', source: boss.uid, target: target.uid, status: 'burn', duration: 3 });
+          }
+        }
+      }
+      const phaseCadence = Math.max(0.55, 1 - boss.bossPhaseIndex * 0.2);
+      bossTimers.set(boss.uid, due + mechanic.interval * phaseCadence);
     }
 
     // action meters

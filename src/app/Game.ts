@@ -9,7 +9,7 @@ import { clearRunState, loadMeta, saveMeta, saveRunState, type MetaSave } from '
 import { Sfx } from '../audio/Sfx';
 import type { RunState } from '../sim/run';
 import { AmbientBackground } from '../ui/fx/AmbientBackground';
-import { preloadPortraits } from '../ui/portraits';
+import { preloadCoreAssets, preloadGameplayAssets } from '../ui/portraits';
 import { H, Palette, Type, W } from '../ui/theme';
 import type { Scene } from './Scene';
 import { fitDesignSpace } from './layout';
@@ -37,6 +37,7 @@ export class Game {
   private readonly toastAnimations = new Map<Container, Array<ReturnType<typeof Tweens.to>>>();
   private viewportDesignWidth = W;
   private viewportDesignHeight = H;
+  private gameplayAssetsReady = false;
 
   get visibleDesignWidth(): number {
     return this.viewportDesignWidth;
@@ -56,7 +57,7 @@ export class Game {
     });
     host.appendChild(this.app.canvas);
     this.sfx.setMuted(this.meta.audioMuted);
-    await preloadPortraits(onProgress);
+    await preloadCoreAssets(onProgress);
 
     this.app.stage.addChild(this.bg);
     this.frame.addChild(this.shaker);
@@ -202,11 +203,49 @@ export class Game {
     saveMeta(this.meta);
   }
 
+  /** Load run-only art after the menu, keeping initial mobile startup light. */
+  async prepareGameplayAssets(): Promise<void> {
+    if (this.gameplayAssetsReady) return;
+    const wrap = new Container();
+    const dim = new Graphics().rect(0, 0, W, H).fill({ color: Palette.black, alpha: 0.94 });
+    const title = new Text({ text: 'PREPARING THE LEGENDS', style: Type.h2() });
+    title.anchor.set(0.5);
+    title.position.set(W / 2, H / 2 - 58);
+    const track = new Graphics().roundRect(W / 2 - 220, H / 2, 440, 18, 9)
+      .fill({ color: Palette.panel, alpha: 1 })
+      .stroke({ color: Palette.borderLight, width: 1.5 });
+    const fill = new Graphics();
+    const status = new Text({ text: 'LOADING 0%', style: Type.tiny() });
+    status.anchor.set(0.5);
+    status.position.set(W / 2, H / 2 + 42);
+    wrap.addChild(dim, title, track, fill, status);
+    this.frame.addChild(wrap);
+    await preloadGameplayAssets((loaded, total) => {
+      const pct = total > 0 ? loaded / total : 1;
+      fill.clear().roundRect(W / 2 - 216, H / 2 + 4, 432 * pct, 10, 5).fill(Palette.gold);
+      status.text = `LOADING ${Math.round(pct * 100)}%`;
+    });
+    this.gameplayAssetsReady = true;
+    this.frame.removeChild(wrap);
+    wrap.destroy({ children: true });
+  }
+
   /** Persist the active climb so closing the tab never destroys a run. */
   saveRun(): void {
     if (this.runConcluded) return; // a finished climb must never be resumable
-    if (this.run) saveRunState(this.run.toSave());
-    else clearRunState();
+    if (this.run) {
+      saveRunState(this.run.toSave());
+      const legendIds = new Set(this.meta.discoveredLegendIds);
+      const relicIds = new Set(this.meta.discoveredRelicIds);
+      const before = legendIds.size + relicIds.size;
+      this.run.roster.forEach((entry) => legendIds.add(entry.defId));
+      this.run.relicIds.forEach((id) => relicIds.add(id));
+      if (legendIds.size + relicIds.size !== before) {
+        this.meta.discoveredLegendIds = [...legendIds];
+        this.meta.discoveredRelicIds = [...relicIds];
+        this.saveMeta();
+      }
+    } else clearRunState();
   }
 
   /** Start (or resume) a climb and let it autosave again. */

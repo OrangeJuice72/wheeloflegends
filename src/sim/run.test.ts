@@ -6,13 +6,52 @@ import type { ModifierId } from '../data/modifiers';
 import { Balance } from '../data/balance';
 import { getShopItem, itemPowerScore, ITEM_SPIN_PRICES, ITEM_SPIN_WEIGHTS, ITEM_TIER_ORDER, matchesItemAffinity, MYSTERY_ITEM_WEIGHTS, SHOP_ITEMS } from '../data/items';
 import { CHARACTERS, getCharacter } from '../data/characters';
-import { generateFloor, floorScale, isBossFloor, floorKind, isCombatFloor } from './tower';
+import { generateFloor, floorScale, isBossFloor, floorKind, isCombatFloor, routeChoices } from './tower';
 import { Rng } from '../core/Rng';
 import { computeSynergies, combineBonuses } from './synergy';
 import { SYNERGIES } from '../data/synergies';
 import type { Rarity } from '../data/types';
 import { characterPowerScore, CURATED_RARITY, strengthTypes } from '../data/characterRules';
 import { BATTLEFIELDS } from '../data/battlefields';
+
+describe('run relic builds', () => {
+  it('applies conditional relic bonuses and persists named relics', () => {
+    const run = new RunState(7100);
+    run.addRecruit(getCharacter('shrek'));
+    expect(run.addRelic('mana-prism')).toBe(true);
+    expect(run.addRelic('underdog-crown')).toBe(true);
+    const spec = run.playerSpecs()[0]!;
+    expect(spec.startingEnergy).toBe(30);
+    expect(spec.extraBoosts?.atk).toBeCloseTo(0.16);
+    const restored = RunState.fromSave(run.toSave());
+    expect(restored?.relicIds).toEqual(['mana-prism', 'underdog-crown']);
+  });
+
+  it('guarantees a named relic reward while unowned relics remain', () => {
+    const run = new RunState(7101);
+    run.addRecruit(getCharacter('shrek'));
+    expect(run.generateRewards().some((choice) => choice.id.startsWith('run-relic-'))).toBe(true);
+  });
+
+  it('applies post-battle healing and bonus battle coins', () => {
+    const plain = new RunState(7102);
+    const relic = new RunState(7102);
+    plain.addRecruit(getCharacter('shrek'));
+    relic.addRecruit(getCharacter('shrek'));
+    relic.addRelic('phoenix-feather');
+    relic.addRelic('gilded-compass');
+    const result: BattleResult = {
+      winner: 'player', duration: 8, events: [],
+      units: [{ uid: 'p0', defId: 'shrek', side: 'player', damageDealt: 10, healingDone: 0, kills: 1, dodges: 0, alive: true, hpPct: 0.5 }],
+    };
+    const plainGold = plain.gold;
+    const relicGold = relic.gold;
+    plain.applyBattleResult(result);
+    relic.applyBattleResult(result);
+    expect(relic.roster[0]!.hpPct).toBeCloseTo(0.62);
+    expect(relic.gold - relicGold).toBeGreaterThan(plain.gold - plainGold);
+  });
+});
 
 describe('recruit odds', () => {
   it('20k spins match the published summon odds within tolerance', () => {
@@ -221,43 +260,47 @@ describe('floor event deck', () => {
     expect(combatShare).toBeLessThan(0.95); // but events show up regularly
   });
 
-  it('resolves each event room with a real reward', () => {
+  it('offers explicit choices and resolves each event room with a real reward', () => {
     const run = new RunState(1, 'normal');
-    // treasure: an artifact plus coins
-    const treasure = new RunState(1, 'normal');
-    let found = { treasure: false, rest: false, merchant: false };
-    for (let seed = 1; seed <= 120 && !(found.treasure && found.rest && found.merchant); seed++) {
-      const probe = new RunState(seed, 'normal');
-      probe.addRecruit(getCharacter('superman'));
-      for (let floor = 2; floor <= 30; floor++) {
-        probe.floor = floor;
-        const kind = probe.currentFloor().kind;
-        if (kind === 'treasure' && !found.treasure) {
-          const before = probe.inventory.length;
-          const gold = probe.gold;
-          const out = probe.resolveEventFloor();
-          expect(probe.inventory.length).toBe(before + 1);
-          expect(probe.gold).toBeGreaterThan(gold);
-          expect(out.itemId).toBeTruthy();
-          found.treasure = true;
-        } else if (kind === 'rest' && !found.rest) {
-          probe.roster[0]!.hpPct = 0.3;
-          probe.resolveEventFloor();
-          expect(probe.roster[0]!.hpPct).toBe(1);
-          found.rest = true;
-        } else if (kind === 'merchant' && !found.merchant) {
-          const gold = probe.gold;
-          const spins = probe.spins;
-          probe.resolveEventFloor();
-          expect(probe.gold).toBeGreaterThan(gold);
-          expect(probe.spins).toBe(spins + 1);
-          found.merchant = true;
-        }
-      }
-    }
-    expect(found).toEqual({ treasure: true, rest: true, merchant: true });
+    const probe = new RunState(22, 'normal');
+    probe.addRecruit(getCharacter('superman'));
+    probe.floor = 2;
+
+    probe.selectedFloorKind = 'treasure';
+    expect(probe.eventChoices()).toHaveLength(3);
+    const before = probe.inventory.length;
+    const gold = probe.gold;
+    const treasure = probe.resolveEventChoice('open-cache');
+    expect(probe.inventory.length).toBe(before + 1);
+    expect(probe.gold).toBeGreaterThan(gold);
+    expect(treasure.itemId).toBeTruthy();
+
+    probe.eventResolvedFloor = null;
+    probe.selectedFloorKind = 'rest';
+    probe.roster[0]!.hpPct = 0.3;
+    probe.resolveEventChoice('full-rest');
+    expect(probe.roster[0]!.hpPct).toBe(1);
+
+    probe.eventResolvedFloor = null;
+    probe.selectedFloorKind = 'merchant';
+    const merchantGold = probe.gold;
+    const spins = probe.spins;
+    probe.resolveEventChoice('merchant-tip');
+    expect(probe.gold).toBeGreaterThan(merchantGold);
+    expect(probe.spins).toBe(spins + 1);
+
     expect(run.currentFloor().kind).toBe('battle');
-    expect(treasure.floor).toBe(1);
+  });
+
+  it('offers stable branching routes and honors the selected room', () => {
+    const a = routeChoices(3, 777, 'battle');
+    expect(a).toEqual(routeChoices(3, 777, 'battle'));
+    expect(a).toContain('battle');
+    expect(new Set(a).size).toBe(a.length);
+    const run = new RunState(777);
+    run.floor = 3;
+    expect(run.chooseRoute(a[1]!)).toBe(true);
+    expect(run.currentFloor().kind).toBe(a[1]);
   });
 
   it('conquest ladders stay pure fights', () => {

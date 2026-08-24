@@ -76,22 +76,47 @@ async function loadInto(urls: Map<string, string>, store: Map<string, Texture>, 
  * Call once at boot; resolves instantly when no art has been dropped in.
  * `onProgress(loaded, total)` fires as each asset finishes, for a boot loader.
  */
-export async function preloadPortraits(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-  const total = portraitUrls.size + franchiseUrls.size + rarityUrls.size + backgroundUrls.size + battlefieldUrls.size + itemUrls.size;
+let coreLoad: Promise<void> | null = null;
+let gameplayLoad: Promise<void> | null = null;
+
+function loadGroups(
+  groups: readonly [Map<string, string>, Map<string, Texture>][],
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<void> {
+  const total = groups.reduce((sum, [urls]) => sum + urls.size, 0);
   let loaded = 0;
   const tick = (): void => {
     loaded++;
     onProgress?.(loaded, total);
   };
   onProgress?.(0, total);
-  await Promise.all([
-    loadInto(portraitUrls, textureById, tick),
-    loadInto(franchiseUrls, franchiseTexById, tick),
-    loadInto(rarityUrls, rarityTexById, tick),
-    loadInto(backgroundUrls, backgroundTexById, tick),
-    loadInto(battlefieldUrls, battlefieldTexById, tick),
-    loadInto(itemUrls, itemTexById, tick),
-  ]);
+  return Promise.all(groups.map(([urls, store]) => loadInto(urls, store, tick))).then(() => undefined);
+}
+
+/** Small menu/recruiting chrome needed before the first interactive frame. */
+export function preloadCoreAssets(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  coreLoad ??= loadGroups([
+    [franchiseUrls, franchiseTexById],
+    [rarityUrls, rarityTexById],
+    [backgroundUrls, backgroundTexById],
+  ], onProgress);
+  return coreLoad;
+}
+
+/** Heavier portraits, equipment art, and arenas loaded only when a run starts. */
+export function preloadGameplayAssets(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  gameplayLoad ??= loadGroups([
+    [portraitUrls, textureById],
+    [battlefieldUrls, battlefieldTexById],
+    [itemUrls, itemTexById],
+  ], onProgress);
+  return gameplayLoad;
+}
+
+/** Backward-compatible full preload for tools that explicitly request everything. */
+export async function preloadPortraits(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  await preloadCoreAssets(onProgress);
+  await preloadGameplayAssets(onProgress);
 }
 
 export function portraitTexture(characterId: string): Texture | undefined {

@@ -8,6 +8,7 @@ import type { Game } from '../../app/Game';
 import { ConquestMapScene } from './ConquestMapScene';
 import { EventScene } from './EventScene';
 import { TeamScene } from './TeamScene';
+import { RouteScene } from './RouteScene';
 
 /** Send the player into the floor they are currently standing on. */
 export function enterCurrentFloor(game: Game): void {
@@ -22,6 +23,12 @@ export function enterCurrentFloor(game: Game): void {
 
 /** Step to the next floor and route into it. */
 export function advanceToNextFloor(game: Game): void {
-  game.run?.advanceFloor();
-  enterCurrentFloor(game);
+  const run = game.run;
+  if (!run) return;
+  run.advanceFloor();
+  if (run.isConquest()) {
+    enterCurrentFloor(game);
+    return;
+  }
+  game.goto(new RouteScene(game, () => enterCurrentFloor(game)));
 }
