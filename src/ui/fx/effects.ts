@@ -20,6 +20,7 @@ interface Particle {
 }
 
 export class FxLayer extends Container {
+  reducedEffects = false;
   private particles: Particle[] = [];
   private pool: Sprite[] = [];
 
@@ -33,7 +34,7 @@ export class FxLayer extends Container {
     y: number,
     opts: { color?: number; count?: number; speed?: number; life?: number; size?: number; gravity?: number } = {},
   ): void {
-    const count = opts.count ?? 16;
+    const count = this.reducedEffects ? Math.ceil((opts.count ?? 16) * 0.25) : (opts.count ?? 16);
     for (let i = 0; i < count; i++) {
       const sprite = this.pool.pop() ?? new Sprite(dotTexture());
       sprite.texture = dotTexture();
@@ -314,6 +315,7 @@ export class FxLayer extends Container {
 
   /** Full-screen tinted flash (ults, legendary reveals). Keep alpha subtle. */
   flash(color: number, alpha = 0.25): void {
+    if (this.reducedEffects) return;
     const rect = new Graphics().rect(-200, -200, W + 400, H + 400).fill(color);
     rect.alpha = alpha;
     rect.eventMode = 'none';

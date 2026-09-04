@@ -13,7 +13,8 @@ import { WEAKNESS_LABEL } from '../../data/characterRules';
 import { getFranchise } from '../../data/franchises';
 import { getBattlefield } from '../../data/battlefields';
 import type { AutoStrategy, BattleAbilitySlot, BattleChoice, CombatantSpec } from '../../sim/battle';
-import type { CharacterDef, StatusKind } from '../../data/types';
+import type { CharacterDef } from '../../data/types';
+import { combatEffectForBuff, STATUS_EFFECT_ORDER, STATUS_EFFECTS, type CombatEffectKind } from '../../data/statusEffects';
 import { simulateBattle } from '../../sim/battle';
 import { applyBattleRecords } from '../../sim/records';
 import type { BattleEvent, BattleResult, Side, UnitSnapshot } from '../../sim/events';
@@ -42,7 +43,7 @@ interface UnitView {
   name: string;
   def: CharacterDef;
   side: Side;
-  statuses: { kind: StatusKind; until: number }[];
+  statuses: { kind: CombatEffectKind; until: number }[];
   alive: boolean;
 }
 
@@ -75,6 +76,12 @@ export class BattleScene extends Scene {
   private decisionMeta = new Map<BattleAbilitySlot, Text>();
   private targetOverlays: Container[] = [];
   private turnPanel = new Container();
+  private turnChips: { container: Container; frame: Graphics; name: Text; detail: Text; color: number }[] = [];
+  private planRows: { container: Container; name: Text; detail: Text }[] = [];
+  private intentPanel = new Container();
+  private effectsGlossary = new Container();
+  private effectTip: Container | null = null;
+  private glossaryResumeSpeed: number | null = null;
   private cardLayer = new Container();
   private backdrop!: BattleBackdrop;
 
@@ -220,7 +227,10 @@ export class BattleScene extends Scene {
     for (const e of this.result.events) {
       if (e.kind !== 'spawn') continue;
       const def = getCharacter(e.defId);
-      const card = new CharacterCard(def, { mode: 'battle', level: e.level, mirror: e.side === 'enemy' });
+      const card = new CharacterCard(def, {
+        mode: 'battle', level: e.level, mirror: e.side === 'enemy',
+        onStatusInspect: (kind) => this.showEffectTip(kind),
+      });
       const pos = this.slotPos(e.side, e.slot);
       card.rotation = e.side === 'player' ? CARD_TILT : -CARD_TILT;
       card.setBattlePose(pos.x, pos.y, CARD_SCALE * (e.boss ? 1.12 : 1));
@@ -236,6 +246,8 @@ export class BattleScene extends Scene {
     }
 
     this.buildTurnOrderPanel();
+    this.buildIntentPanel();
+    this.buildEffectsGlossary();
 
     this.addChild(this.fx);
     this.buildDecisionPanel();
@@ -309,47 +321,213 @@ export class BattleScene extends Scene {
 
   private buildTurnOrderPanel(): void {
     const bg = new Graphics()
-      .roundRect(-286, -22, 572, 46, 12)
+      .roundRect(-350, -22, 700, 46, 12)
       .fill({ color: Palette.black, alpha: 0.72 })
       .stroke({ color: Palette.borderLight, width: 1.3, alpha: 0.72 });
     this.turnPanel.position.set(640, 112);
     this.turnPanel.addChild(bg);
+    const next = new Text({ text: 'NEXT\nTURNS', style: Type.tiny() });
+    next.style.fill = Palette.gold;
+    next.anchor.set(0.5);
+    next.position.set(-310, 0);
+    this.turnPanel.addChild(next);
+    for (let index = 0; index < 6; index++) {
+      const container = new Container();
+      container.position.set(-236 + index * 98, 0);
+      const frame = new Graphics();
+      const name = new Text({ text: '', style: Type.tiny() });
+      name.style.fontSize = 11;
+      name.style.letterSpacing = 0.2;
+      name.anchor.set(0.5);
+      name.position.set(0, -7);
+      const detail = new Text({ text: '', style: Type.tiny() });
+      detail.style.letterSpacing = 0.2;
+      detail.anchor.set(0.5);
+      detail.position.set(0, 8);
+      container.addChild(frame, name, detail);
+      this.turnPanel.addChild(container);
+      this.turnChips.push({ container, frame, name, detail, color: -1 });
+    }
     this.addChild(this.turnPanel);
   }
 
   private renderTurnOrder(order: readonly string[], snapshots: readonly UnitSnapshot[]): void {
-    while (this.turnPanel.children.length > 1) {
-      this.turnPanel.removeChildAt(1).destroy({ children: true });
-    }
-    const next = new Text({ text: 'NEXT', style: Type.tiny() });
-    next.style.fill = Palette.gold;
-    next.anchor.set(0.5);
-    next.position.set(-254, 0);
-    this.turnPanel.addChild(next);
     const byUid = new Map(snapshots.map((snapshot) => [snapshot.uid, snapshot]));
-    order.slice(0, 6).forEach((uid, index) => {
-      const view = this.views.get(uid);
+    const intentIcon = { attack: '⚔', control: '✦', support: '✚', ultimate: '★', charge: '↟' } as const;
+    this.turnChips.forEach((chip, index) => {
+      const uid = order[index];
+      const view = uid ? this.views.get(uid) : undefined;
+      chip.container.visible = !!view;
       if (!view) return;
-      const snapshot = byUid.get(uid);
-      const x = -205 + index * 82;
+      const snapshot = byUid.get(view.uid);
       const color = view.side === 'player' ? Palette.blue : Palette.danger;
-      const chip = new Graphics()
-        .roundRect(x - 37, -16, 74, 32, 8)
-        .fill({ color: mix(color, Palette.black, 0.72), alpha: 0.92 })
-        .stroke({ color, width: index === 0 ? 2 : 1, alpha: 0.82 });
-      const name = new Text({ text: view.name.split(' ')[0]!.slice(0, 9).toUpperCase(), style: Type.tiny() });
+      if (chip.color !== color) {
+        chip.frame.clear().roundRect(-46, -17, 92, 34, 8)
+          .fill({ color: mix(color, Palette.black, 0.78), alpha: 0.98 })
+          .stroke({ color, width: index === 0 ? 2 : 1, alpha: 0.9 });
+        chip.color = color;
+      }
+      chip.name.text = view.name.replace(/^The /, '').split(' ')[0]!.slice(0, 10).toUpperCase();
+      chip.name.style.fill = Palette.white;
+      chip.name.scale.set(1);
+      if (chip.name.width > 84) chip.name.scale.set(84 / chip.name.width);
+      const enemyIntent = snapshot?.intent;
+      chip.detail.text = view.side === 'enemy' && enemyIntent
+          ? `${intentIcon[enemyIntent.kind]} ${enemyIntent.slot.toUpperCase()}`
+          : `${Math.round(snapshot?.meter ?? 0)}% READY`;
+      chip.detail.style.fill = view.side === 'enemy' ? Palette.danger : Palette.energy;
+    });
+    this.renderEnemyPlans(order, snapshots);
+  }
+
+  private buildIntentPanel(): void {
+    const bg = new Graphics()
+      .roundRect(-230, 0, 460, 240, 12)
+      .fill({ color: Palette.black, alpha: 0.86 })
+      .stroke({ color: Palette.danger, width: 1.2, alpha: 0.55 });
+    this.intentPanel.position.set(640, 148);
+    this.intentPanel.addChild(bg);
+    const title = new Text({ text: 'ENEMY FORECAST · MAY CHANGE', style: Type.tiny() });
+    title.style.fill = Palette.danger;
+    title.anchor.set(0.5, 0);
+    title.position.set(0, 10);
+    this.intentPanel.addChild(title);
+    for (let index = 0; index < 5; index++) {
+      const container = new Container();
+      container.position.set(-212, 34 + index * 40);
+      const name = new Text({ text: '', style: Type.small() });
       name.style.fill = Palette.white;
-      name.anchor.set(0.5);
-      name.position.set(x, -6);
-      const intent = new Text({
-        text: view.side === 'enemy' ? (snapshot?.intent ?? 'basic').toUpperCase() : `${Math.round(snapshot?.meter ?? 0)}%`,
-        style: Type.tiny(),
-      });
-      intent.style.fontSize = 8;
-      intent.style.fill = view.side === 'enemy' ? Palette.danger : Palette.energy;
-      intent.anchor.set(0.5);
-      intent.position.set(x, 7);
-      this.turnPanel.addChild(chip, name, intent);
+      name.style.fontWeight = 'bold';
+      const detail = new Text({ text: '', style: Type.small() });
+      detail.style.fill = Palette.text;
+      detail.position.y = 17;
+      container.addChild(name, detail);
+      this.intentPanel.addChild(container);
+      this.planRows.push({ container, name, detail });
+    }
+    this.addChild(this.intentPanel);
+  }
+
+  private renderEnemyPlans(order: readonly string[], snapshots: readonly UnitSnapshot[]): void {
+    const byUid = new Map(snapshots.map((snapshot) => [snapshot.uid, snapshot]));
+    const orderedEnemies = [...new Set([
+      ...order.filter((uid) => this.views.get(uid)?.side === 'enemy'),
+      ...snapshots.filter((snapshot) => this.views.get(snapshot.uid)?.side === 'enemy').map((snapshot) => snapshot.uid),
+    ])].filter((uid) => this.views.get(uid)?.alive).slice(0, 5);
+    this.intentPanel.visible = orderedEnemies.length > 0;
+    if (orderedEnemies.length === 0) return;
+
+    const icons = { attack: '⚔', control: '✦', support: '✚', ultimate: '★', charge: '↟' } as const;
+    this.planRows.forEach((row, index) => {
+      const uid = orderedEnemies[index];
+      row.container.visible = !!uid;
+      if (!uid) return;
+      const view = this.views.get(uid)!;
+      const intent = byUid.get(uid)?.intent;
+      if (!intent) return;
+      let target = 'SELF';
+      if (intent.targetMode === 'enemy-all') target = 'ALL ENEMIES';
+      else if (intent.targetMode === 'ally-all') target = 'ALL ALLIES';
+      else if (intent.targetMode === 'enemy-random') target = 'RANDOM TARGET';
+      else if (intent.targetMode === 'enemy-front') target = 'FRONT LINE';
+      else if (intent.targetMode === 'enemy-back') target = 'BACK LINE';
+      else if (intent.targetUids.length === 1) target = this.views.get(intent.targetUids[0]!)?.name.toUpperCase() ?? 'TARGET';
+      row.name.text = `${icons[intent.kind]} ${view.name.toUpperCase()}`;
+      row.name.style.fill = intent.kind === 'ultimate' ? Palette.gold : intent.kind === 'support' ? Palette.success : Palette.text;
+      row.detail.text = `${intent.ability} → ${target}`;
+      row.detail.scale.set(1);
+      if (row.detail.width > 424) row.detail.scale.set(424 / row.detail.width);
+    });
+  }
+
+  private buildEffectsGlossary(): void {
+    const toggle = new Button('EFFECTS', this.game.sfx, {
+      width: 106, height: 36, variant: 'ghost',
+      onClick: () => this.toggleEffectsGlossary(),
+    });
+    // Header-left keeps the help control clear of the upper back-line card.
+    toggle.position.set(62, 54);
+    this.addChild(toggle);
+
+    const width = 820;
+    const height = 460;
+    const bg = new Graphics()
+      .roundRect(0, 0, width, height, 18)
+      .fill({ color: Palette.panel, alpha: 0.985 })
+      .stroke({ color: Palette.gold, width: 2.5 });
+    bg.eventMode = 'static';
+    const title = new Text({ text: 'COMBAT EFFECTS', style: Type.h2() });
+    title.anchor.set(0.5, 0);
+    title.position.set(width / 2, 16);
+    this.effectsGlossary.addChild(bg, title);
+    STATUS_EFFECT_ORDER.forEach((kind, index) => {
+      const def = STATUS_EFFECTS[kind];
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const x = 24 + col * 400;
+      const y = 62 + row * 43;
+      const chip = new Graphics().roundRect(x, y, 374, 36, 9)
+        .fill({ color: mix(def.color, Palette.black, 0.82), alpha: 0.9 })
+        .stroke({ color: def.color, width: 1, alpha: 0.6 });
+      const icon = new Text({ text: def.icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 18 } });
+      icon.anchor.set(0.5);
+      icon.position.set(x + 18, y + 18);
+      const name = new Text({ text: def.name.toUpperCase(), style: Type.tiny() });
+      name.style.fill = def.color;
+      name.position.set(x + 37, y + 4);
+      const desc = new Text({ text: def.description, style: Type.tiny() });
+      desc.style.fontSize = 9;
+      desc.style.fill = Palette.textDim;
+      desc.position.set(x + 37, y + 19);
+      if (desc.width > 326) desc.scale.set(326 / desc.width);
+      this.effectsGlossary.addChild(chip, icon, name, desc);
+    });
+    const done = new Button('DONE', this.game.sfx, {
+      width: 180, height: 42, variant: 'primary', onClick: () => this.toggleEffectsGlossary(false),
+    });
+    done.position.set(width / 2, height - 30);
+    this.effectsGlossary.addChild(done);
+    this.effectsGlossary.position.set((1280 - width) / 2, (720 - height) / 2);
+    this.effectsGlossary.visible = false;
+    this.addChild(this.effectsGlossary);
+  }
+
+  private toggleEffectsGlossary(force?: boolean): void {
+    const show = force ?? !this.effectsGlossary.visible;
+    if (show === this.effectsGlossary.visible) return;
+    this.effectsGlossary.visible = show;
+    if (show) {
+      this.glossaryResumeSpeed = this.speed;
+      this.speed = 0;
+      this.addChild(this.effectsGlossary);
+    } else {
+      this.speed = this.glossaryResumeSpeed ?? this.speed;
+      this.glossaryResumeSpeed = null;
+    }
+    this.refreshSpeedButtons();
+  }
+
+  private showEffectTip(kind: CombatEffectKind): void {
+    if (this.effectTip?.parent) this.removeChild(this.effectTip);
+    this.effectTip?.destroy({ children: true });
+    const def = STATUS_EFFECTS[kind];
+    const tip = new Container();
+    const bg = new Graphics().roundRect(-220, -24, 440, 48, 12)
+      .fill({ color: Palette.black, alpha: 0.94 })
+      .stroke({ color: def.color, width: 1.5 });
+    const text = new Text({ text: `${def.icon}  ${def.name.toUpperCase()} · ${def.description}`, style: Type.tiny() });
+    text.anchor.set(0.5);
+    text.style.fill = Palette.text;
+    if (text.width > 414) text.scale.set(414 / text.width);
+    tip.addChild(bg, text);
+    tip.position.set(640, 570);
+    this.effectTip = tip;
+    this.addChild(tip);
+    Tweens.delay(2.8, () => {
+      if (this.effectTip !== tip) return;
+      this.effectTip = null;
+      if (tip.parent) tip.parent.removeChild(tip);
+      tip.destroy({ children: true });
     });
   }
 
@@ -802,6 +980,9 @@ export class BattleScene extends Scene {
       case 'shield': {
         const target = this.views.get(e.target);
         if (!target) break;
+        target.statuses = target.statuses.filter((status) => status.kind !== 'shield');
+        target.statuses.push({ kind: 'shield', until: e.t + 6 });
+        this.refreshStatuses(target);
         target.card.playShield();
         this.fx.impactRing(target.card.x, target.card.y, Palette.shield, true);
         this.fx.floatText(target.card.x, target.card.y - 50, 'SHIELD', { color: Palette.shield });
@@ -812,17 +993,26 @@ export class BattleScene extends Scene {
       case 'status': {
         const target = this.views.get(e.target);
         if (!target) break;
+        target.statuses = target.statuses.filter((status) => status.kind !== e.status);
         target.statuses.push({ kind: e.status, until: e.t + e.duration });
         this.refreshStatuses(target);
         const src = this.views.get(e.source);
-        if (src && (e.status === 'stun' || e.status === 'freeze')) {
-          this.log(`${target.name} is ${e.status === 'stun' ? 'stunned' : 'frozen'}`, Palette.blue, 'status');
+        if (src) {
+          const def = STATUS_EFFECTS[e.status];
+          this.fx.floatText(target.card.x, target.card.y - 84, `${def.icon} ${def.name.toUpperCase()}`, {
+            color: def.color, minor: true,
+          });
+          this.log(`${target.name} gained ${def.name}`, def.color, 'status');
         }
         break;
       }
       case 'buff': {
         const target = this.views.get(e.target);
         if (!target) break;
+        const effect = combatEffectForBuff(e.stat, e.amount);
+        target.statuses = target.statuses.filter((status) => status.kind !== effect);
+        target.statuses.push({ kind: effect, until: e.t + e.duration });
+        this.refreshStatuses(target);
         const sign = e.amount >= 0 ? '+' : '';
         // Above the portrait — at -30 this printed straight over the name band.
         // Marked minor: buff chatter must not shout as loudly as damage.
@@ -865,7 +1055,8 @@ export class BattleScene extends Scene {
           if (!view || !view.alive) continue;
           view.card.setHp(snap.hp);
           view.card.setEnergy(snap.energy);
-          this.refreshStatuses(view);
+          view.statuses = snap.effects.map((effect) => ({ kind: effect.kind, until: this.clock + effect.remaining }));
+          view.card.setStatuses(snap.effects.map((effect) => effect.kind));
         }
         break;
       }
@@ -937,10 +1128,11 @@ export class BattleScene extends Scene {
   }
 
   override update(dt: number): void {
+    this.fx.reducedEffects = this.game.meta.reducedEffects;
     this.fx.update(dt);
-    this.backdrop.update(dt);
+    if (!this.game.meta.reducedEffects) this.backdrop.update(dt);
     for (const view of this.views.values()) {
-      view.card.updatePulse(dt);
+      if (!this.game.meta.reducedEffects) view.card.updatePulse(dt);
     }
     if (this.finished && this.eventIndex >= this.result.events.length) return;
     this.clock += dt * this.speed;

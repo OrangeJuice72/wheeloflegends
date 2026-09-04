@@ -12,8 +12,9 @@ import { effectiveItemBoosts, getShopItem, itemBattleSummary, itemExtraActions, 
 import type { ItemBoosts } from '../data/items';
 import { getAffix, type AffixId } from '../data/affixes';
 import { getBossMechanic } from '../data/bosses';
+import { combatEffectForBuff, statusPower, type CombatEffectKind } from '../data/statusEffects';
 import { combineBonuses, computeSynergies } from './synergy';
-import type { BattleEvent, BattleResult, Side, UnitResultStats } from './events';
+import type { ActiveEffectSnapshot, BattleEvent, BattleResult, EnemyIntentSnapshot, Side, UnitResultStats } from './events';
 
 export interface CombatantSpec {
   defId: string;
@@ -57,6 +58,8 @@ interface StatusInst {
   timeLeft: number;
   dps: number; // burn/shock damage per second (absolute)
   hps: number; // regen heal per second (absolute)
+  power: number;
+  sourceUid: string;
 }
 
 interface BuffInst {
@@ -194,14 +197,17 @@ function buffTotal(u: Unit, stat: BuffInst['stat']): number {
 
 function atkOf(u: Unit): number {
   const rage = Math.min(u.rageStacks * u.ragePerHit, u.rageCap);
-  return u.baseAtk * Math.max(0.1, 1 + buffTotal(u, 'atk') + rage);
+  const weaken = Math.max(0, ...u.statuses.filter((s) => s.kind === 'weaken').map((s) => s.power));
+  return u.baseAtk * Math.max(0.1, 1 + buffTotal(u, 'atk') + rage - weaken);
 }
 function defOf(u: Unit): number {
   return Math.max(0, u.baseDef * (1 + buffTotal(u, 'def')));
 }
 function spdOf(u: Unit): number {
   const shocked = u.statuses.some((s) => s.kind === 'shock') ? -0.2 : 0;
-  return Math.max(1, u.baseSpd * (1 + buffTotal(u, 'spd') + shocked));
+  const haste = Math.max(0, ...u.statuses.filter((s) => s.kind === 'haste').map((s) => s.power));
+  const slow = Math.max(0, ...u.statuses.filter((s) => s.kind === 'slow').map((s) => s.power));
+  return Math.max(1, u.baseSpd * (1 + buffTotal(u, 'spd') + shocked + haste - slow));
 }
 function critOf(u: Unit): number {
   return Math.min(1, Math.max(0, u.baseCrit + buffTotal(u, 'crit')));
@@ -320,7 +326,8 @@ export function simulateBattle(
       emit({ t, kind: 'dodge', target: target.uid });
       return;
     }
-    let amount = Math.max(1, Math.round(raw));
+    const vulnerable = Math.max(0, ...target.statuses.filter((s) => s.kind === 'vulnerable').map((s) => s.power));
+    let amount = Math.max(1, Math.round(raw * (1 + vulnerable)));
     let shielded = false;
     for (const sh of target.shields) {
       if (amount <= 0) break;
@@ -356,6 +363,27 @@ export function simulateBattle(
     target.hp += amount;
     source.healingDone += amount;
     emit({ t, kind: 'heal', source: source.uid, target: target.uid, amount, hpAfter: target.hp });
+  }
+
+  /** Statuses do not stack with themselves: the stronger application wins and duration refreshes. */
+  function applyStatus(source: Unit, target: Unit, kind: StatusKind, duration: number, authoredPower = 0): void {
+    if (!target.alive) return;
+    const power = statusPower(kind, authoredPower);
+    const dps = kind === 'burn' || kind === 'shock' || kind === 'bleed' ? atkOf(source) * power : 0;
+    const hps = kind === 'regen' ? target.maxHp * power : 0;
+    const current = target.statuses.find((status) => status.kind === kind);
+    if (current) {
+      current.timeLeft = Math.max(current.timeLeft, duration);
+      if (power >= current.power) {
+        current.power = power;
+        current.dps = dps;
+        current.hps = hps;
+        current.sourceUid = source.uid;
+      }
+    } else {
+      target.statuses.push({ kind, timeLeft: duration, dps, hps, power, sourceUid: source.uid });
+    }
+    emit({ t, kind: 'status', source: source.uid, target: target.uid, status: kind, duration });
   }
 
   function checkTransform(u: Unit): void {
@@ -405,8 +433,7 @@ export function simulateBattle(
         for (const target of preferred.length > 0 ? preferred : foes) {
           applyDamage(u, target, atkOf(u) * phase.pulseMult, false);
           if (phase.burn && target.alive) {
-            target.statuses.push({ kind: 'burn', timeLeft: 3, dps: atkOf(u) * 0.08, hps: 0 });
-            emit({ t, kind: 'status', source: u.uid, target: target.uid, status: 'burn', duration: 3 });
+            applyStatus(u, target, 'burn', 3, 0.08);
           }
         }
       }
@@ -447,15 +474,7 @@ export function simulateBattle(
           break;
         case 'status':
           for (const target of targetsFor(actor, eff.target, explicitTarget)) {
-            if (!target.alive) continue;
-            const power = eff.power ?? 0;
-            target.statuses.push({
-              kind: eff.status,
-              timeLeft: eff.duration,
-              dps: eff.status === 'burn' || eff.status === 'shock' ? atkOf(actor) * power : 0,
-              hps: eff.status === 'regen' ? target.maxHp * power : 0,
-            });
-            emit({ t, kind: 'status', source: actor.uid, target: target.uid, status: eff.status, duration: eff.duration });
+            applyStatus(actor, target, eff.status, eff.duration, eff.power ?? 0);
           }
           break;
         case 'buff':
@@ -547,6 +566,55 @@ export function simulateBattle(
     return 'basic';
   }
 
+  function previewTargets(actor: Unit, ability: AbilityDef | undefined): { uids: string[]; mode: string } {
+    if (!ability) return { uids: [actor.uid], mode: 'self' };
+    const modes = [...new Set(ability.effects.map((effect) => effect.target))];
+    const targetUids = new Set<string>();
+    const label: TargetMode = modes.find((mode) => mode.startsWith('enemy')) ?? modes[0] ?? 'self';
+    for (const mode of [label]) {
+      if (mode === 'self') targetUids.add(actor.uid);
+      else if (mode === 'enemy-all') aliveOf(foesOf(actor)).forEach((unit) => targetUids.add(unit.uid));
+      else if (mode === 'ally-all') aliveOf(alliesOf(actor)).forEach((unit) => targetUids.add(unit.uid));
+      else if (mode === 'enemy-random') validManualTargets(actor, mode).forEach((unit) => targetUids.add(unit.uid));
+      else {
+        const candidates = validManualTargets(actor, mode);
+        if (mode === 'enemy-lowest' || mode === 'ally-lowest') {
+          const lowest = candidates.reduce<Unit | undefined>((best, unit) =>
+            !best || unit.hp / unit.maxHp < best.hp / best.maxHp ? unit : best, undefined);
+          if (lowest) targetUids.add(lowest.uid);
+        } else if (candidates[0]) {
+          // Front/back attacks pick randomly from this legal row. Showing every
+          // candidate is more honest than claiming an exact target prematurely.
+          candidates.forEach((unit) => targetUids.add(unit.uid));
+        }
+      }
+    }
+    return { uids: [...targetUids], mode: label };
+  }
+
+  function intentFor(u: Unit): EnemyIntentSnapshot {
+    const slot = automaticAbility(u);
+    const ability = abilityForSlot(u, slot);
+    const targets = previewTargets(u, ability);
+    const effects = ability?.effects ?? [];
+    const controls = effects.some((effect) => effect.kind === 'debuff'
+      || (effect.kind === 'status' && ['stun', 'freeze', 'shock', 'slow', 'weaken', 'vulnerable'].includes(effect.status)));
+    const supports = effects.some((effect) => effect.kind === 'heal' || effect.kind === 'shield' || effect.kind === 'buff'
+      || (effect.kind === 'status' && ['regen', 'taunt', 'haste'].includes(effect.status)));
+    const kind = slot === 'ult' ? 'ultimate'
+      : slot === 'charge' ? 'charge'
+        : controls ? 'control'
+          : supports && !effects.some((effect) => effect.kind === 'damage') ? 'support'
+            : 'attack';
+    return {
+      slot,
+      ability: slot === 'charge' ? 'Charge' : ability?.name ?? 'Basic Attack',
+      kind,
+      targetUids: targets.uids,
+      targetMode: targets.mode,
+    };
+  }
+
   function act(u: Unit): boolean {
     let slot: BattleAbilitySlot;
     let explicitTarget: Unit | undefined;
@@ -620,12 +688,43 @@ export function simulateBattle(
   }
 
   // ── main loop ──────────────────────────────────────────────────────────
+  const activeEffectsOf = (unit: Unit): ActiveEffectSnapshot[] => {
+    const effects = new Map<CombatEffectKind, ActiveEffectSnapshot>();
+    const add = (kind: CombatEffectKind, remaining: number, value?: number) => {
+      const current = effects.get(kind);
+      if (!current || remaining > current.remaining || (value ?? 0) > (current.value ?? 0)) {
+        effects.set(kind, { kind, remaining, ...(value !== undefined ? { value } : {}) });
+      }
+    };
+    unit.statuses.forEach((status) => add(status.kind, status.timeLeft, status.power));
+    unit.buffs.forEach((buff) => add(combatEffectForBuff(buff.stat, buff.amount), buff.timeLeft, Math.abs(buff.amount)));
+    if (unit.shields.length > 0) {
+      add('shield', Math.max(...unit.shields.map((shield) => shield.timeLeft)), unit.shields.reduce((sum, shield) => sum + shield.amount, 0));
+    }
+    return [...effects.values()];
+  };
+
+  const forecastTurnOrder = (living: Unit[], count = 8): string[] => {
+    const eligible = living.filter((unit) => !isCrowdControlled(unit));
+    const meters = new Map(eligible.map((unit) => [unit.uid, unit.meter]));
+    const order: string[] = [];
+    while (eligible.length > 0 && order.length < count) {
+      const next = [...eligible].sort((a, b) => {
+        const aWait = Math.max(0, B.actionMeterMax - (meters.get(a.uid) ?? 0)) / spdOf(a);
+        const bWait = Math.max(0, B.actionMeterMax - (meters.get(b.uid) ?? 0)) / spdOf(b);
+        return aWait - bWait || a.uid.localeCompare(b.uid);
+      })[0]!;
+      const wait = Math.max(0, B.actionMeterMax - (meters.get(next.uid) ?? 0)) / spdOf(next);
+      for (const unit of eligible) meters.set(unit.uid, Math.min(B.actionMeterMax, (meters.get(unit.uid) ?? 0) + spdOf(unit) * wait));
+      meters.set(next.uid, 0);
+      order.push(next.uid);
+    }
+    return order;
+  };
+
   const snapshot = () => {
     const living = all.filter((unit) => unit.alive);
-    const turnOrder = [...living]
-      .sort((a, b) => ((B.actionMeterMax - a.meter) / spdOf(a)) - ((B.actionMeterMax - b.meter) / spdOf(b)))
-      .slice(0, 6)
-      .map((unit) => unit.uid);
+    const turnOrder = forecastTurnOrder(living);
     emit({
       t,
       kind: 'tick',
@@ -635,7 +734,8 @@ export function simulateBattle(
         hp: unit.hp,
         energy: Math.round(unit.energy),
         meter: Math.round(unit.meter),
-        ...(unit.side === 'enemy' && unit.alive ? { intent: automaticAbility(unit) } : {}),
+        effects: activeEffectsOf(unit),
+        ...(unit.side === 'enemy' && unit.alive ? { intent: intentFor(unit) } : {}),
       })),
     });
   };
@@ -674,25 +774,25 @@ export function simulateBattle(
       statusAccum = 0;
       for (const u of all) {
         if (!u.alive) continue;
-        let dot = 0;
         let regen = u.maxHp * u.regenPerSec;
         for (const s of u.statuses) {
-          dot += s.dps;
           regen += s.hps;
-        }
-        if (dot > 0) {
-          const sourceUid = u.side === 'player' ? 'e?' : 'p?';
-          // DoT damage is attributed to nobody for stats; emit with synthetic source
-          let amount = Math.max(1, Math.round(dot));
+          if (s.dps <= 0 || !u.alive) continue;
+          const amount = Math.max(1, Math.round(s.dps));
+          const source = all.find((candidate) => candidate.uid === s.sourceUid);
           u.hp = Math.max(0, u.hp - amount);
-          emit({ t, kind: 'damage', source: sourceUid, target: u.uid, amount, crit: false, weakness: false, hpAfter: u.hp, shielded: false });
+          if (source) source.damageDealt += amount;
+          emit({ t, kind: 'damage', source: s.sourceUid, target: u.uid, amount, crit: false, weakness: false, hpAfter: u.hp, shielded: false });
           if (u.hp <= 0) {
             u.alive = false;
+            if (source) source.kills++;
             emit({ t, kind: 'death', uid: u.uid });
-            continue;
+            break;
           }
           checkTransform(u);
+          checkBossPhases(u);
         }
+        if (!u.alive) continue;
         if (regen > 0 && u.hp < u.maxHp) {
           const amount = Math.min(Math.round(regen), u.maxHp - u.hp);
           if (amount > 0) {
@@ -722,8 +822,7 @@ export function simulateBattle(
         for (const target of targets) {
           applyDamage(boss, target, atkOf(boss) * 0.58, false);
           if (target.alive) {
-            target.statuses.push({ kind: 'burn', timeLeft: 3, dps: atkOf(boss) * 0.08, hps: 0 });
-            emit({ t, kind: 'status', source: boss.uid, target: target.uid, status: 'burn', duration: 3 });
+            applyStatus(boss, target, 'burn', 3, 0.08);
           }
         }
       }

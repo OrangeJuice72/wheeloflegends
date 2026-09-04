@@ -39,7 +39,18 @@ export type TargetMode =
   | 'ally-lowest'
   | 'ally-all';
 
-export type StatusKind = 'burn' | 'shock' | 'stun' | 'freeze' | 'regen' | 'taunt';
+export type StatusKind =
+  | 'burn'
+  | 'shock'
+  | 'bleed'
+  | 'stun'
+  | 'freeze'
+  | 'regen'
+  | 'taunt'
+  | 'haste'
+  | 'slow'
+  | 'weaken'
+  | 'vulnerable';
 
 export type BuffStat = 'atk' | 'def' | 'spd' | 'crit';
 

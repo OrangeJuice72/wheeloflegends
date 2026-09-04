@@ -5,6 +5,7 @@
  */
 
 import type { AbilityFx, StatusKind, BuffStat } from '../data/types';
+import type { CombatEffectKind } from '../data/statusEffects';
 
 export type Side = 'player' | 'enemy';
 
@@ -23,7 +24,24 @@ export interface UnitSnapshot {
   hp: number;
   energy: number;
   meter: number;
-  intent?: string;
+  effects: ActiveEffectSnapshot[];
+  intent?: EnemyIntentSnapshot;
+}
+
+export interface ActiveEffectSnapshot {
+  kind: CombatEffectKind;
+  remaining: number;
+  value?: number;
+}
+
+export type IntentKind = 'attack' | 'control' | 'support' | 'ultimate' | 'charge';
+
+export interface EnemyIntentSnapshot {
+  slot: BattleChoiceOption['slot'];
+  ability: string;
+  kind: IntentKind;
+  targetUids: string[];
+  targetMode: string;
 }
 
 export type BattleEvent =

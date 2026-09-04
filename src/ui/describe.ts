@@ -36,6 +36,8 @@ export function describeEffect(eff: EffectDef): string {
           return `Burns ${t} for ${pct(eff.power ?? 0)} ATK/s (${eff.duration}s)`;
         case 'shock':
           return `Shocks ${t}: ${pct(eff.power ?? 0)} ATK/s and −20% SPD (${eff.duration}s)`;
+        case 'bleed':
+          return `Bleeds ${t} for ${pct(eff.power ?? 0)} ATK/s, bypassing shields (${eff.duration}s)`;
         case 'stun':
           return `Stuns ${t} (${eff.duration}s)`;
         case 'freeze':
@@ -44,6 +46,14 @@ export function describeEffect(eff: EffectDef): string {
           return `Grants ${t} ${pct(eff.power ?? 0)} max-HP regen/s (${eff.duration}s)`;
         case 'taunt':
           return `Taunts: draws enemy attacks (${eff.duration}s)`;
+        case 'haste':
+          return `Hastens ${t}: +${pct(eff.power ?? 0.25)} SPD (${eff.duration}s)`;
+        case 'slow':
+          return `Slows ${t}: −${pct(eff.power ?? 0.25)} SPD (${eff.duration}s)`;
+        case 'weaken':
+          return `Weakens ${t}: −${pct(eff.power ?? 0.2)} ATK (${eff.duration}s)`;
+        case 'vulnerable':
+          return `Exposes ${t}: +${pct(eff.power ?? 0.2)} damage taken (${eff.duration}s)`;
       }
       break;
     }

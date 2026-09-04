@@ -38,6 +38,7 @@ export class Game {
   private viewportDesignWidth = W;
   private viewportDesignHeight = H;
   private gameplayAssetsReady = false;
+  private saveWarningShown = false;
 
   get visibleDesignWidth(): number {
     return this.viewportDesignWidth;
@@ -52,7 +53,7 @@ export class Game {
       background: Palette.bg,
       resizeTo: host,
       antialias: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      resolution: this.meta.reducedEffects ? 1 : Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     });
     host.appendChild(this.app.canvas);
@@ -92,7 +93,7 @@ export class Game {
       layout(); // no-op unless the window changed size
       const dt = Math.min(ticker.deltaMS / 1000, 0.1);
       Tweens.update(dt);
-      this.bg.update(dt);
+      if (!this.meta.reducedEffects) this.bg.update(dt);
       this.scene?.update(dt);
       this.updateShake(dt);
     });
@@ -100,8 +101,13 @@ export class Game {
     // Portrait mode is an orientation gate, not a squeezed live game. Pause the
     // simulation until the device returns to the intended landscape layout.
     const landscape = window.matchMedia('(orientation: landscape)');
-    const syncOrientation = () => landscape.matches ? this.app.ticker.start() : this.app.ticker.stop();
+    const syncOrientation = () => landscape.matches && !document.hidden ? this.app.ticker.start() : this.app.ticker.stop();
     landscape.addEventListener('change', syncOrientation);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.saveRun();
+      syncOrientation();
+    });
+    window.addEventListener('pagehide', () => this.saveRun());
     syncOrientation();
   }
 
@@ -140,6 +146,7 @@ export class Game {
   }
 
   shake(magnitude: number, duration: number): void {
+    if (this.meta.reducedEffects) return;
     // A stronger incoming shake overrides; a weaker one won't cut a big one short.
     if (magnitude >= this.shakeMag || this.shakeTime >= this.shakeDuration) {
       this.shakeMag = magnitude;
@@ -203,6 +210,16 @@ export class Game {
     saveMeta(this.meta);
   }
 
+  setReducedEffects(enabled: boolean): void {
+    this.meta.reducedEffects = enabled;
+    this.app.renderer.resolution = enabled ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    if (enabled) {
+      this.shakeTime = this.shakeDuration;
+      this.shaker.position.set(0, 0);
+    }
+    this.saveMeta();
+  }
+
   /** Load run-only art after the menu, keeping initial mobile startup light. */
   async prepareGameplayAssets(): Promise<void> {
     if (this.gameplayAssetsReady) return;
@@ -234,7 +251,12 @@ export class Game {
   saveRun(): void {
     if (this.runConcluded) return; // a finished climb must never be resumable
     if (this.run) {
-      saveRunState(this.run.toSave());
+      const saved = saveRunState(this.run.toSave());
+      if (!saved && !this.saveWarningShown) {
+        this.saveWarningShown = true;
+        this.toast('Unable to save. Keep this tab open to continue your run.', Palette.danger);
+      }
+      if (saved) this.saveWarningShown = false;
       const legendIds = new Set(this.meta.discoveredLegendIds);
       const relicIds = new Set(this.meta.discoveredRelicIds);
       const before = legendIds.size + relicIds.size;
@@ -245,7 +267,19 @@ export class Game {
         this.meta.discoveredRelicIds = [...relicIds];
         this.saveMeta();
       }
-    } else clearRunState();
+    }
+  }
+
+  /** Returning to the title screen preserves the climb for Continue. */
+  suspendRun(): boolean {
+    if (!this.run || !saveRunState(this.run.toSave())) {
+      this.toast('Could not save your run. Please keep playing in this tab.', Palette.danger);
+      return false;
+    }
+    this.saveRun();
+    this.run = null;
+    this.runConcluded = true;
+    return true;
   }
 
   /** Start (or resume) a climb and let it autosave again. */

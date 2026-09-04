@@ -51,13 +51,26 @@ replaces the emblem on every card surface. See
 
 The complete run loop now includes wheel or draft recruiting, formation bonuses,
 equipment and a persistent bag, manual targeted commands or configurable auto-AI,
-turn-order and enemy-intent previews, animated battles, expanded reward drafts,
+a six-action visible turn forecast, named enemy moves and likely targets, a tappable
+combat-effect glossary, animated battles, expanded reward drafts,
 branching tower routes, choice-based rest/treasure/merchant events, and distinct
 multi-phase Godzilla, Bowser, and Mewtwo boss mechanics. Named run relics now
 enable formation, rarity, energy, lifesteal, recovery, and economy builds. The
 Legend Codex tracks collection discoveries while the Record Hall stores career
 statistics. The roster currently contains 155 characters and can keep growing
 through the data-driven asset folders.
+
+Status reapplication refreshes duration instead of creating hidden duplicate
+stacks. Battle cards consistently surface Burn, Bleed, Shock, Stun, Freeze,
+Regen, Taunt, Haste, Slow, Weaken, Vulnerable, shields, and ordinary stat buffs.
+
+Battle forecasts reuse their display elements and use larger, two-line enemy
+plans. Settings includes Reduced Effects for lower render resolution, fewer
+combat particles, and no battle flashes or screen shake. Save & Menu preserves
+the current run; abandoning it remains a separate confirmed action. Run saves
+are validated and keep a previous-checkpoint backup for corruption recovery.
+Backgrounding the app pauses rendering and saves progress. A failed startup
+offers a retry button instead of leaving the loading screen stuck.
 
 Gameplay art is staged after the menu so the start screen appears quickly. Run
 `npm run balance -- --samples=8 --mode=5v5` after roster or stat changes to screen

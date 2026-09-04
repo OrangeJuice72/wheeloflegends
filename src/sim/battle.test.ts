@@ -209,8 +209,37 @@ describe('battle planning and guardians', () => {
   it('publishes a live turn order and enemy intent', () => {
     const result = simulateBattle([spec('pikachu', 0)], [spec('bowser', 0)], 951);
     const tick = result.events.find((event) => event.kind === 'tick');
-    expect(tick?.kind === 'tick' && tick.turnOrder.length).toBeGreaterThan(0);
-    expect(tick?.kind === 'tick' && tick.units.find((unit) => unit.uid === 'e0')?.intent).toBeTruthy();
+    expect(tick?.kind === 'tick' && tick.turnOrder).toHaveLength(8);
+    expect(tick?.kind === 'tick' && new Set(tick.turnOrder).size).toBeLessThan(8);
+    const intent = tick?.kind === 'tick' ? tick.units.find((unit) => unit.uid === 'e0')?.intent : undefined;
+    expect(intent?.ability).toBeTruthy();
+    expect(intent?.kind).toMatch(/attack|control|support|ultimate|charge/);
+    expect(intent?.targetMode).toBeTruthy();
+  });
+
+  it('publishes named active effects without duplicate status stacks', () => {
+    const result = simulateBattle(
+      [spec('ghostface', 0, { startingEnergy: Balance.battle.skillEnergyCost })],
+      [spec('godzilla', 0)],
+      953,
+    );
+    expect(result.events.some((event) => event.kind === 'status' && event.status === 'bleed')).toBe(true);
+    const snapshots = result.events.filter((event): event is Extract<(typeof result.events)[number], { kind: 'tick' }> => event.kind === 'tick');
+    expect(snapshots.some((event) => event.units.some((unit) => unit.effects.some((effect) => effect.kind === 'bleed')))).toBe(true);
+    for (const event of snapshots) {
+      for (const unit of event.units) {
+        expect(new Set(unit.effects.map((effect) => effect.kind)).size).toBe(unit.effects.length);
+      }
+    }
+  });
+
+  it('translates combat buffs into readable Haste and Weaken effects', () => {
+    const haste = simulateBattle([spec('flash', 0, { startingEnergy: Balance.battle.energyMax })], [spec('bowser', 0)], 954);
+    expect(haste.events.some((event) => event.kind === 'tick'
+      && event.units.some((unit) => unit.uid === 'p0' && unit.effects.some((effect) => effect.kind === 'haste')))).toBe(true);
+    const weaken = simulateBattle([spec('pikachu', 0)], [spec('shrek', 0, { startingEnergy: Balance.battle.skillEnergyCost })], 955);
+    expect(weaken.events.some((event) => event.kind === 'tick'
+      && event.units.some((unit) => unit.uid === 'p0' && unit.effects.some((effect) => effect.kind === 'weaken')))).toBe(true);
   });
 
   it('uses distinct balanced and aggressive auto policies', () => {

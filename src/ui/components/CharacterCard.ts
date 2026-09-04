@@ -8,7 +8,8 @@ import { Tweens, Easing } from '../../core/Tween';
 import { Balance } from '../../data/balance';
 import { getShopItem } from '../../data/items';
 import { strengthSummary, WEAKNESS_LABEL } from '../../data/characterRules';
-import type { CharacterDef, StatusKind } from '../../data/types';
+import type { CharacterDef } from '../../data/types';
+import { STATUS_EFFECTS, type CombatEffectKind } from '../../data/statusEffects';
 import { mix, Palette, RarityColor, RarityLabel, RarityTier, Type } from '../theme';
 import { glowTexture } from '../fx/textures';
 import { buildPortrait } from '../portraits';
@@ -17,15 +18,6 @@ import { buildRarityIcon } from './RarityIcon';
 
 export const CARD_W = 150;
 export const CARD_H = 205;
-
-const STATUS_GLYPH: Record<StatusKind, string> = {
-  burn: '🔥',
-  shock: '⚡',
-  stun: '💫',
-  freeze: '❄️',
-  regen: '💚',
-  taunt: '🛡️',
-};
 
 export interface CardOpts {
   mode: 'battle' | 'roster';
@@ -39,6 +31,8 @@ export interface CardOpts {
   heldItemId?: string | null;
   /** Optional dossier action shown as a tappable info badge. */
   onInspect?: () => void;
+  /** Battle mode: reveal a concise explanation for a tapped status icon. */
+  onStatusInspect?: (kind: CombatEffectKind) => void;
 }
 
 export class CharacterCard extends Container {
@@ -66,10 +60,13 @@ export class CharacterCard extends Container {
   private fireMotes: Graphics[] = [];
   private battlePose: { x: number; y: number; scale: number; rotation: number } | null = null;
   private motionActive = false;
+  private statusSignature = '';
+  private readonly onStatusInspect?: (kind: CombatEffectKind) => void;
 
   constructor(def: CharacterDef, opts: CardOpts) {
     super();
     this.def = def;
+    this.onStatusInspect = opts.onStatusInspect;
     const rarityTier = RarityTier[def.rarity];
     this.rarityTier = rarityTier;
     this.legendary = rarityTier >= 3;
@@ -448,11 +445,21 @@ export class CharacterCard extends Container {
     }
   }
 
-  setStatuses(kinds: StatusKind[]): void {
+  setStatuses(kinds: CombatEffectKind[]): void {
+    const visible = [...new Set(kinds)].slice(0, 5);
+    const signature = visible.join('|');
+    if (signature === this.statusSignature) return;
+    this.statusSignature = signature;
     this.statusRow.removeChildren().forEach((c) => c.destroy());
-    kinds.slice(0, 5).forEach((kind, i) => {
-      const icon = new Text({ text: STATUS_GLYPH[kind], style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 13 } });
+    visible.forEach((kind, i) => {
+      const icon = new Text({ text: STATUS_EFFECTS[kind].icon, style: { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: 13 } });
       icon.position.set(i * 17, 0);
+      if (this.onStatusInspect) {
+        icon.eventMode = 'static';
+        icon.cursor = 'help';
+        icon.on('pointertap', () => this.onStatusInspect?.(kind));
+        icon.on('pointerover', () => this.onStatusInspect?.(kind));
+      }
       this.statusRow.addChild(icon);
     });
   }

@@ -77,7 +77,7 @@ export class SettingsModal extends Container {
 
     this.addChoiceRow(
       'DEFAULT BATTLE',
-      'Manual commands or automatic combat',
+      'Manual or automatic combat',
       [{ label: 'MANUAL', value: false }, { label: 'AUTO', value: true }],
       this.game.meta.defaultAutoBattle,
       294,
@@ -98,34 +98,43 @@ export class SettingsModal extends Container {
     );
 
     const records = new Button('🏆  RECORDS', this.game.sfx, {
-      width: 250,
+      width: 240,
       height: 46,
       variant: 'secondary',
       onClick: () => this.openRecords(),
     });
-    records.position.set(PANEL_W / 2, 520);
+    records.position.set(166, 520);
     this.sheet.addChild(records);
 
-    // Quitting to the main menu lives here — behind the gear and a confirm —
-    // so it can't be tapped by accident between battles and lose the run.
+    const effects = new Button(this.game.meta.reducedEffects ? 'EFFECTS: REDUCED' : 'EFFECTS: FULL', this.game.sfx, {
+      width: 240, height: 46, variant: 'secondary',
+      onClick: () => {
+        this.game.setReducedEffects(!this.game.meta.reducedEffects);
+        this.render();
+      },
+    });
+    effects.position.set(434, 520);
+    this.sheet.addChild(effects);
+
+    // Keep saving separate from the explicitly confirmed destructive action.
     if (this.game.run) {
-      if (this.confirmingQuit) {
-        const warn = new Text({ text: 'Leaving now abandons this run — progress is lost.', style: Type.small() });
-        warn.style.fill = Palette.danger;
-        warn.anchor.set(0.5);
-        warn.position.set(PANEL_W / 2, 556);
-        this.sheet.addChild(warn);
-      }
-      const quit = new Button(this.confirmingQuit ? 'CONFIRM — QUIT RUN' : '⌂  MAIN MENU', this.game.sfx, {
+      const abandon = new Button(this.confirmingQuit ? 'CONFIRM ABANDON RUN' : 'ABANDON RUN', this.game.sfx, {
+        width: 264, height: 24, variant: 'ghost',
+        onClick: () => {
+          if (this.confirmingQuit) this.quitToMenu();
+          else { this.confirmingQuit = true; this.render(); }
+        },
+      });
+      abandon.position.set(PANEL_W / 2, 556);
+      this.sheet.addChild(abandon);
+      const quit = new Button('SAVE & MENU', this.game.sfx, {
         width: 264,
         height: 52,
         variant: 'secondary',
         onClick: () => {
-          if (this.confirmingQuit) {
-            this.quitToMenu();
-          } else {
-            this.confirmingQuit = true;
-            this.render();
+          if (this.game.suspendRun()) {
+            this.onClose();
+            this.game.goto(new MenuScene(this.game));
           }
         },
       });
@@ -178,6 +187,9 @@ export class SettingsModal extends Container {
     const heading = new Text({ text: label, style: Type.h3() });
     heading.position.set(38, y + 16);
     const detail = new Text({ text: description, style: Type.small() });
+    detail.style.wordWrap = true;
+    detail.style.wordWrapWidth = 192;
+    detail.style.fontSize = 11;
     detail.position.set(38, y + 42);
     this.sheet.addChild(row, heading, detail);
 

@@ -335,7 +335,7 @@ export const NEW_CHARACTERS: CharacterDef[] = [
     stats: { hp: 100000, atk: 12200, def: 40, spd: 44, crit: 0.28, critDmg: 1.8 },
     abilities: [
       { id: 'gf-basic', name: 'Kitchen Knife', slot: 'basic', effects: [{ kind: 'damage', target: 'enemy-front', mult: 1 }], fx: 'strike', color: 0xd6d6d6 },
-      { id: 'gf-skill', name: 'Silent Stalk', slot: 'skill', cooldown: 6, effects: [{ kind: 'damage', target: 'enemy-back', mult: 1.75, executeBelow: 0.3 }], fx: 'strike', color: 0xffffff },
+      { id: 'gf-skill', name: 'Silent Stalk', slot: 'skill', cooldown: 6, effects: [{ kind: 'damage', target: 'enemy-back', mult: 1.6, executeBelow: 0.3 }, { kind: 'status', target: 'enemy-back', status: 'bleed', duration: 4, power: 0.12 }], fx: 'strike', color: 0xffffff },
       { id: 'gf-ult', name: 'Favorite Scary Movie', slot: 'ult', effects: [{ kind: 'damage', target: 'enemy-random', mult: 0.66, hits: 5 }, { kind: 'debuff', target: 'enemy-all', stat: 'def', amount: 0.12, duration: 4 }], fx: 'burst', color: 0xc4c4c4 },
     ],
     passives: [{ kind: 'dodge', chance: 0.17 }], portrait: { glyph: 'GF', colorA: 0x14161f, colorB: 0xe8e8e8 },

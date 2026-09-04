@@ -69,4 +69,15 @@ async function boot(): Promise<void> {
   }
 }
 
-void boot();
+void boot().catch((error: unknown) => {
+  console.error('Game startup failed', error);
+  const loader = document.getElementById('loader');
+  const status = document.getElementById('loader-status');
+  if (loader) loader.classList.remove('loaded');
+  if (status) status.textContent = 'Unable to start the game. Check your connection, then retry.';
+  const retry = document.createElement('button');
+  retry.textContent = 'RETRY';
+  retry.style.cssText = 'padding:14px 36px;border:1px solid #79dcff;border-radius:12px;background:#142042;color:#fff;font:600 16px sans-serif;cursor:pointer';
+  retry.addEventListener('click', () => window.location.reload());
+  (loader ?? document.body).appendChild(retry);
+});
